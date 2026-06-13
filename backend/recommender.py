@@ -147,7 +147,7 @@ class LinearScorer:
         score(x) = w0*similarity + w1*imdb_norm + w2*popularity_norm
                  = w^T x
 
-    Weights are initialised from domain knowledge (similarity dominates).
+    Weights are initialized from domain knowledge (similarity dominates).
     The `gradient_step` method shows how they would be refined via gradient
     descent on MSE loss if user watch/skip labels were available:
 
@@ -226,7 +226,7 @@ class SimpleNN:
         h  = ReLU(W1 * x + b1)
         y^ = sigma(W2 * h + b2)
 
-    Weights are initialised to approximate the domain-knowledge linear scorer
+    Weights are initialized to approximate the domain-knowledge linear scorer
     so the network produces sensible results without any training.  In
     production, `fit()` runs mini-batch gradient descent on user interaction
     labels (watched = 1, skipped = 0) to learn non-linear feature interactions
@@ -237,7 +237,7 @@ class SimpleNN:
         rng = np.random.default_rng(seed)
         n_in = 3
 
-        # He initialisation scales variance for stable ReLU gradients
+        # He initialization scales variance for stable ReLU gradients
         self.W1 = rng.standard_normal((n_hidden, n_in)) * np.sqrt(2.0 / n_in)
         self.b1 = np.zeros(n_hidden)
 
