@@ -27,6 +27,7 @@ DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _normalize_title(title: str) -> str:
     """Lowercase, strip, remove punctuation – used only as a join key."""
     t = str(title).lower().strip()
@@ -72,6 +73,7 @@ def _coalesce_merge(left: pd.DataFrame, right: pd.DataFrame, on: list) -> pd.Dat
 # Individual loaders
 # ---------------------------------------------------------------------------
 
+
 def _load_platform_base() -> pd.DataFrame:
     """
     Combine MoviesOnStreamingPlatforms + tv_shows into a unified platform-
@@ -84,22 +86,34 @@ def _load_platform_base() -> pd.DataFrame:
     tv["content_type"] = "tv"
 
     movies["imdb_score"] = None
-    movies["rotten_tomatoes"] = movies["Rotten Tomatoes"].apply(
-        lambda x: _parse_score(x, 100)
-    )
+    movies["rotten_tomatoes"] = movies["Rotten Tomatoes"].apply(lambda x: _parse_score(x, 100))
     tv["imdb_score"] = tv["IMDb"].apply(lambda x: _parse_score(x, 10))
-    tv["rotten_tomatoes"] = tv["Rotten Tomatoes"].apply(
-        lambda x: _parse_score(x, 100)
-    )
+    tv["rotten_tomatoes"] = tv["Rotten Tomatoes"].apply(lambda x: _parse_score(x, 100))
 
     keep = [
-        "Title", "Year", "Age", "Netflix", "Hulu", "Prime Video", "Disney+",
-        "content_type", "imdb_score", "rotten_tomatoes",
+        "Title",
+        "Year",
+        "Age",
+        "Netflix",
+        "Hulu",
+        "Prime Video",
+        "Disney+",
+        "content_type",
+        "imdb_score",
+        "rotten_tomatoes",
     ]
     base = pd.concat([movies[keep], tv[keep]], ignore_index=True)
     base.columns = [
-        "title", "year", "age_rating", "netflix", "hulu", "prime_video",
-        "disney_plus", "content_type", "imdb_score", "rotten_tomatoes",
+        "title",
+        "year",
+        "age_rating",
+        "netflix",
+        "hulu",
+        "prime_video",
+        "disney_plus",
+        "content_type",
+        "imdb_score",
+        "rotten_tomatoes",
     ]
 
     for col in ("netflix", "hulu", "prime_video", "disney_plus"):
@@ -117,25 +131,34 @@ def _load_netflix_content() -> pd.DataFrame:
     movies = pd.read_csv(
         os.path.join(DATA_DIR, "netflix", "netflix_movies_detailed_up_to_2025.csv")
     )
-    tv = pd.read_csv(
-        os.path.join(DATA_DIR, "netflix", "netflix_tv_shows_detailed_up_to_2025.csv")
-    )
+    tv = pd.read_csv(os.path.join(DATA_DIR, "netflix", "netflix_tv_shows_detailed_up_to_2025.csv"))
     movies["content_type"] = "movie"
     tv["content_type"] = "tv"
 
     nf = pd.concat([movies, tv], ignore_index=True)
-    nf = nf.rename(columns={
-        "release_year": "year",
-        "vote_average": "tmdb_score",
-        "vote_count": "tmdb_votes",
-    })
+    nf = nf.rename(
+        columns={
+            "release_year": "year",
+            "vote_average": "tmdb_score",
+            "vote_count": "tmdb_votes",
+        }
+    )
     nf["title_key"] = nf["title"].apply(_normalize_title)
     nf["year"] = pd.to_numeric(nf["year"], errors="coerce")
 
     keep = [
-        "title_key", "year", "content_type",
-        "description", "genres", "cast", "director",
-        "language", "country", "tmdb_score", "tmdb_votes", "popularity",
+        "title_key",
+        "year",
+        "content_type",
+        "description",
+        "genres",
+        "cast",
+        "director",
+        "language",
+        "country",
+        "tmdb_score",
+        "tmdb_votes",
+        "popularity",
     ]
     return (
         nf[keep]
@@ -175,19 +198,29 @@ def _load_disney_content() -> pd.DataFrame:
     titles["year"] = pd.to_numeric(titles["release_year"], errors="coerce")
 
     keep = [
-        "title_key", "year", "content_type",
-        "description", "genres", "cast", "director",
-        "imdb_score", "imdb_votes", "tmdb_popularity", "tmdb_score",
+        "title_key",
+        "year",
+        "content_type",
+        "description",
+        "genres",
+        "cast",
+        "director",
+        "imdb_score",
+        "imdb_votes",
+        "tmdb_popularity",
+        "tmdb_score",
         "age_certification",
     ]
     return (
         titles[keep]
-        .rename(columns={
-            "imdb_score": "disney_imdb_score",
-            "imdb_votes": "disney_imdb_votes",
-            "tmdb_popularity": "popularity",
-            "age_certification": "disney_age_cert",
-        })
+        .rename(
+            columns={
+                "imdb_score": "disney_imdb_score",
+                "imdb_votes": "disney_imdb_votes",
+                "tmdb_popularity": "popularity",
+                "age_certification": "disney_age_cert",
+            }
+        )
         .drop_duplicates(subset=["title_key", "year", "content_type"])
         .reset_index(drop=True)
     )
@@ -196,6 +229,7 @@ def _load_disney_content() -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+
 
 def load_data(include_orphans: bool = True) -> pd.DataFrame:
     """
@@ -254,9 +288,7 @@ def load_data(include_orphans: bool = True) -> pd.DataFrame:
             source: pd.DataFrame, orig_titles: pd.DataFrame, platform_col: str
         ) -> pd.DataFrame:
             """Source rows not already in the platform base."""
-            mask = ~source.apply(
-                lambda r: (r["title_key"], r["year"]) in base_keys, axis=1
-            )
+            mask = ~source.apply(lambda r: (r["title_key"], r["year"]) in base_keys, axis=1)
             orphans = orig_titles[mask].copy()
             orphans["title"] = orig_titles.loc[mask, "title_key"]
             for col in ("netflix", "hulu", "prime_video", "disney_plus"):
@@ -326,7 +358,7 @@ def load_data(include_orphans: bool = True) -> pd.DataFrame:
             parts.append(str(row["description"]))
         if row.get("genres") and pd.notna(row["genres"]):
             g = str(row["genres"]).replace(",", " ")
-            parts.extend([g, g])   # double-weight genres
+            parts.extend([g, g])  # double-weight genres
         if row.get("cast") and pd.notna(row["cast"]):
             parts.append(str(row["cast"]))
         if row.get("director") and pd.notna(row["director"]):
@@ -337,11 +369,26 @@ def load_data(include_orphans: bool = True) -> pd.DataFrame:
 
     # ----- Canonical column order -----
     ordered = [
-        "title", "year", "content_type", "age_rating",
-        "netflix", "hulu", "prime_video", "disney_plus",
-        "description", "genres", "cast", "director",
-        "language", "country",
-        "imdb_score", "imdb_votes", "rotten_tomatoes", "tmdb_score", "tmdb_votes", "popularity",
+        "title",
+        "year",
+        "content_type",
+        "age_rating",
+        "netflix",
+        "hulu",
+        "prime_video",
+        "disney_plus",
+        "description",
+        "genres",
+        "cast",
+        "director",
+        "language",
+        "country",
+        "imdb_score",
+        "imdb_votes",
+        "rotten_tomatoes",
+        "tmdb_score",
+        "tmdb_votes",
+        "popularity",
         "tfidf_soup",
     ]
     present = [c for c in ordered if c in df.columns]
@@ -361,4 +408,15 @@ if __name__ == "__main__":
     key_cols = ["description", "genres", "cast", "director", "tfidf_soup"]
     print(df[key_cols].isnull().sum())
     print(f"\nSample tfidf_soup (row 0):\n{df['tfidf_soup'].iloc[0][:300]}")
-    print(f"\nSample row:\n{df.iloc[0][['title','year','content_type','netflix','hulu','prime_video','disney_plus','genres','imdb_score']].to_dict()}")
+    sample_cols = [
+        "title",
+        "year",
+        "content_type",
+        "netflix",
+        "hulu",
+        "prime_video",
+        "disney_plus",
+        "genres",
+        "imdb_score",
+    ]
+    print(f"\nSample row:\n{df.iloc[0][sample_cols].to_dict()}")
