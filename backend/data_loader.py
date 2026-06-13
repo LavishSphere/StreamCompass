@@ -37,7 +37,8 @@ def _normalize_title(title: str) -> str:
 
 def _parse_score(value, denom: float):
     try:
-        return round(float(str(value).split("/")[0]) * (10.0 / denom), 2)
+        result = float(str(value).split("/")[0]) * (10.0 / denom)
+        return None if (result != result) else round(result, 2)  # NaN check
     except (ValueError, AttributeError):
         return None
 
