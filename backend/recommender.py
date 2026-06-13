@@ -241,10 +241,10 @@ class SimpleNN:
         self.W1 = rng.standard_normal((n_hidden, n_in)) * np.sqrt(2.0 / n_in)
         self.b1 = np.zeros(n_hidden)
 
-        # Output layer pre-loaded to mirror the LinearScorer weights so the
-        # network is immediately useful even without fine-tuning
-        self.W2 = np.zeros((1, n_hidden))
-        self.W2[0, :3] = [0.60, 0.30, 0.10]
+        # Output layer: uniform positive weights across all hidden units so the
+        # network reliably scores higher-feature inputs higher before training.
+        # Concentrating weight on a subset of units risks cancellation to 0.5.
+        self.W2 = np.ones((1, n_hidden)) / n_hidden
         self.b2 = np.zeros(1)
 
     @staticmethod
@@ -417,11 +417,11 @@ def _find_title_match(query: str, df: pd.DataFrame):
     if not exact.empty:
         return exact.index[0]
 
-    # Substring match (query fully contained in a title or vice versa)
-    sub = normalised[(normalised.str.contains(q, regex=False)) | (q in normalised)]
+    # Substring match: query fully contained in a title
+    sub = normalised[normalised.str.contains(q, regex=False)]
     if not sub.empty:
-        # Prefer the shortest title (closest match)
-        return sub.loc[sub.apply(len).idxmin()]
+        # Prefer the shortest title (least extra words = closest match)
+        return sub.apply(len).idxmin()  # returns integer DataFrame index
 
     return None
 
