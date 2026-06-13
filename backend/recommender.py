@@ -21,6 +21,7 @@ Usage:
 """
 
 import heapq
+import re
 
 import numpy as np
 import pandas as pd
@@ -391,6 +392,41 @@ def _build_features(candidates: list, df: pd.DataFrame) -> np.ndarray:
 
 
 # ---------------------------------------------------------------------------
+# Title match lookup
+# ---------------------------------------------------------------------------
+
+
+def _find_title_match(query: str, df: pd.DataFrame):
+    """
+    Check whether the query is itself a title in the corpus.
+
+    Returns the DataFrame index of the best match, or None.
+    Precedence:
+      1. Exact normalised match  (e.g. "Breaking Bad" -> "breaking bad")
+      2. First substring match   (e.g. "breaking bad s" still hits it)
+    """
+
+    def _norm(t):
+        return re.sub(r"\s+", " ", re.sub(r"[^\w\s]", "", str(t).lower())).strip()
+
+    q = _norm(query)
+    normalised = df["title"].apply(_norm)
+
+    # Exact match first
+    exact = normalised[normalised == q]
+    if not exact.empty:
+        return exact.index[0]
+
+    # Substring match (query fully contained in a title or vice versa)
+    sub = normalised[(normalised.str.contains(q, regex=False)) | (q in normalised)]
+    if not sub.empty:
+        # Prefer the shortest title (closest match)
+        return sub.loc[sub.apply(len).idxmin()]
+
+    return None
+
+
+# ---------------------------------------------------------------------------
 # Main recommendation pipeline
 # ---------------------------------------------------------------------------
 
@@ -454,15 +490,28 @@ def recommend(
     if not query or not query.strip():
         return pd.DataFrame(columns=_RESULT_COLS)
 
-    # ---- Stage 1: encode query into TF-IDF space ----
-    query_vec = vectorizer.transform([query.strip()])
-    if query_vec.nnz == 0:
-        # All query terms are unknown — zero vector, cannot retrieve anything
-        return pd.DataFrame(columns=_RESULT_COLS)
+    # ---- Title match: if query is a known title, seed from its TF-IDF row ----
+    # This ensures "Breaking Bad" uses Breaking Bad's own description/cast/genres
+    # as the similarity seed rather than the raw words "breaking" and "bad".
+    # Falls back to text encoding if the matched title has no content (empty soup).
+    title_match_idx = _find_title_match(query.strip(), df)
+    if title_match_idx is not None and tfidf_matrix[title_match_idx].nnz > 0:
+        query_vec = tfidf_matrix[title_match_idx]
+    else:
+        title_match_idx = None  # treat as plain text query
+        # ---- Stage 1: encode free-text query into TF-IDF space ----
+        query_vec = vectorizer.transform([query.strip()])
+        if query_vec.nnz == 0:
+            # All query terms are unknown — zero vector, cannot retrieve anything
+            return pd.DataFrame(columns=_RESULT_COLS)
 
     # ---- Stage 2: UCS — retrieve candidates from similarity graph ----
     # Over-fetch (5x top_k) to give downstream stages room to filter/re-rank
     candidates = ucs_retrieve(query_vec, tfidf_matrix, n_candidates=top_k * 5)
+
+    # Exclude the matched title itself from results
+    if title_match_idx is not None:
+        candidates = [(i, s) for i, s in candidates if i != title_match_idx]
     if not candidates:
         return pd.DataFrame(columns=_RESULT_COLS)
 
