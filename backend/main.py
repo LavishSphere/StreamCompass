@@ -31,6 +31,14 @@ _state: dict = {}
 PLATFORMS = ["netflix", "hulu", "prime_video", "disney_plus"]
 
 
+def _nn(value):
+    """Return None if value is pandas/numpy NaN, otherwise return value as-is."""
+    try:
+        return None if (value != value) else value
+    except (TypeError, ValueError):
+        return value
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Load dataset and build TF-IDF index once when the server starts."""
@@ -149,10 +157,10 @@ def search(
         "results": [
             {
                 "title": row["title"],
-                "year": row.get("year"),
-                "content_type": row.get("content_type"),
-                "genres": row.get("genres"),
-                "imdb_score": row.get("imdb_score"),
+                "year": _nn(row.get("year")),
+                "content_type": _nn(row.get("content_type")),
+                "genres": _nn(row.get("genres")),
+                "imdb_score": _nn(row.get("imdb_score")),
                 "netflix": int(row.get("netflix") or 0),
                 "hulu": int(row.get("hulu") or 0),
                 "prime_video": int(row.get("prime_video") or 0),
@@ -249,18 +257,16 @@ def get_title(title: str):
 
     return {
         "title": row["title"],
-        "year": row.get("year"),
-        "content_type": row.get("content_type"),
-        "genres": row.get("genres"),
-        "description": row.get("description"),
-        "cast": row.get("cast"),
-        "director": row.get("director"),
-        "language": row.get("language"),
-        "imdb_score": row.get("imdb_score") if pd.notna(row.get("imdb_score")) else None,
-        "rotten_tomatoes": (
-            row.get("rotten_tomatoes") if pd.notna(row.get("rotten_tomatoes")) else None
-        ),
-        "age_rating": row.get("age_rating"),
+        "year": _nn(row.get("year")),
+        "content_type": _nn(row.get("content_type")),
+        "genres": _nn(row.get("genres")),
+        "description": _nn(row.get("description")),
+        "cast": _nn(row.get("cast")),
+        "director": _nn(row.get("director")),
+        "language": _nn(row.get("language")),
+        "imdb_score": _nn(row.get("imdb_score")),
+        "rotten_tomatoes": _nn(row.get("rotten_tomatoes")),
+        "age_rating": _nn(row.get("age_rating")),
         "netflix": int(row.get("netflix") or 0),
         "hulu": int(row.get("hulu") or 0),
         "prime_video": int(row.get("prime_video") or 0),
