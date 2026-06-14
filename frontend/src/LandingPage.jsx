@@ -83,6 +83,7 @@ export default function LandingPage() {
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [loadingSuggestions, setLoadingSuggestions] = useState(false);
   const [activeSuggestion, setActiveSuggestion] = useState(-1);
+  const [datasetSize, setDatasetSize] = useState(42945);
 
   const inputRef = useRef(null);
   const debounceRef = useRef(null);
@@ -91,6 +92,29 @@ export default function LandingPage() {
   /** Auto-focus the search input when the landing page first mounts. */
   useEffect(() => {
     inputRef.current?.focus();
+  }, []);
+
+  /** Load the current dataset size reported by the API. */
+  useEffect(() => {
+    const controller = new AbortController();
+
+    fetch(`${API_BASE}/health`, { signal: controller.signal })
+      .then((res) => {
+        if (!res.ok) throw new Error("Health check failed");
+        return res.json();
+      })
+      .then((data) => {
+        if (Number.isInteger(data.titles_loaded) && data.titles_loaded > 0) {
+          setDatasetSize(data.titles_loaded);
+        }
+      })
+      .catch((error) => {
+        if (error.name !== "AbortError") {
+          console.warn("Could not load dataset size:", error);
+        }
+      });
+
+    return () => controller.abort();
   }, []);
 
   /**
@@ -369,7 +393,7 @@ export default function LandingPage() {
 
       {/* Dataset size hint */}
       <p style={{ marginTop: "48px", fontSize: "14px", color: "#999", textAlign: "center" }}>
-        Searching through 42,945 titles across Netflix, Hulu, Prime Video & Disney+
+        Searching through {datasetSize.toLocaleString()} titles across Netflix, Hulu, Prime Video & Disney+
       </p>
 
       {/* Keyframe animations injected globally for this page */}
