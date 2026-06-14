@@ -71,7 +71,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["https://streamcompass.khayrul.com"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
