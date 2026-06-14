@@ -1,21 +1,13 @@
 /**
  * App.jsx — StreamCompass browse / results page
  *
- * Rendered at "/browse". Reads the ?q= URL param set by LandingPage
- * and displays mock recommendation results in horizontal scrollable rows
- * grouped by type and quality.
+ * Rendered at "/browse". Reads the ?q= URL param set by LandingPage,
+ * fires the real backend recommendation pipeline, and displays results
+ * in horizontal scrollable rows grouped by type and quality.
  *
- * ── MOCK DATA MODE ──────────────────────────────────────────────────────────
- * This file currently uses hardcoded MOCK_DATA instead of calling the backend.
- * This is intentional — it lets you develop and test the UI locally without
- * needing the backend running or dealing with CORS.
- *
- * When you're ready to connect the real API, search for "TODO: API INTEGRATION"
- * comments throughout this file. Each one marks exactly what to change.
- * ────────────────────────────────────────────────────────────────────────────
- *
- * Future API endpoints (when integrating):
+ * API endpoints used:
  *   POST /recommend  — main ML recommendation pipeline (8-stage, see recommender.py)
+ *                      Request body: { query, top_k, lambda_div, platforms?, content_type?, min_imdb? }
  *   GET  /title/{t}  — full metadata for a single title (description, cast, director)
  *
  * External dependencies:
@@ -25,11 +17,8 @@
 import { useState, useRef, useEffect } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 
-/**
- * TODO: API INTEGRATION
- * Uncomment this when connecting the real backend:
- *   const API_BASE = "https://api.khayrul.com";
- */
+/** Base URL for all backend API calls. */
+const API_BASE = "https://api.khayrul.com";
 
 /**
  * Maps platform keys to display labels and brand colors.
@@ -42,12 +31,12 @@ const PLATFORM_COLORS = {
   disney_plus: { bg: "#113CCF", label: "Disney+"  },
 };
 
-/** Platform filter chips shown in the nav bar. "All" means no filter. */
+/** Platform filter chip labels shown in the filter bar. */
 const PLATFORM_FILTER_OPTIONS = ["All", "Netflix", "Hulu", "Prime Video", "Disney+"];
 
 /**
- * Maps human-readable chip label to the platform key used in filtering.
- * TODO: API INTEGRATION — this maps to the `platforms` field in POST /recommend body.
+ * Maps human-readable chip label to the platform key used in the API request.
+ * Passed directly as the `platforms` array in POST /recommend body.
  */
 const PLATFORM_KEY_MAP = {
   "Netflix":     "netflix",
@@ -57,154 +46,14 @@ const PLATFORM_KEY_MAP = {
 };
 
 // ---------------------------------------------------------------------------
-// Mock data
-// Mock data representing the shape of what POST /recommend returns.
-// Each field maps directly to the real API response schema so swapping
-// in real data later requires no changes to the components below.
-//
-// TODO: API INTEGRATION — delete MOCK_DATA and MOCK_DETAIL when connecting
-// the real backend. The components below already handle the same data shape.
-// ---------------------------------------------------------------------------
-
-const MOCK_DATA = [
-  {
-    title: "Inception", year: 2010, content_type: "movie",
-    genres: "Action, Science Fiction, Thriller",
-    imdb_score: 8.8, similarity_score: 0.98,
-    netflix: 1, hulu: 0, prime_video: 1, disney_plus: 0,
-  },
-  {
-    title: "Interstellar", year: 2014, content_type: "movie",
-    genres: "Adventure, Drama, Science Fiction",
-    imdb_score: 8.6, similarity_score: 0.94,
-    netflix: 0, hulu: 1, prime_video: 1, disney_plus: 0,
-  },
-  {
-    title: "The Matrix", year: 1999, content_type: "movie",
-    genres: "Action, Science Fiction",
-    imdb_score: 8.7, similarity_score: 0.91,
-    netflix: 1, hulu: 0, prime_video: 0, disney_plus: 0,
-  },
-  {
-    title: "Arrival", year: 2016, content_type: "movie",
-    genres: "Drama, Science Fiction",
-    imdb_score: 7.9, similarity_score: 0.89,
-    netflix: 0, hulu: 1, prime_video: 1, disney_plus: 0,
-  },
-  {
-    title: "Severance", year: 2022, content_type: "tv",
-    genres: "Drama, Mystery, Science Fiction",
-    imdb_score: 8.7, similarity_score: 0.88,
-    netflix: 0, hulu: 0, prime_video: 0, disney_plus: 0,
-  },
-  {
-    title: "Blade Runner 2049", year: 2017, content_type: "movie",
-    genres: "Drama, Science Fiction",
-    imdb_score: 8.0, similarity_score: 0.87,
-    netflix: 0, hulu: 1, prime_video: 1, disney_plus: 0,
-  },
-  {
-    title: "Ex Machina", year: 2014, content_type: "movie",
-    genres: "Drama, Science Fiction, Thriller",
-    imdb_score: 7.7, similarity_score: 0.85,
-    netflix: 0, hulu: 0, prime_video: 1, disney_plus: 0,
-  },
-  {
-    title: "Westworld", year: 2016, content_type: "tv",
-    genres: "Drama, Science Fiction, Western",
-    imdb_score: 8.5, similarity_score: 0.83,
-    netflix: 0, hulu: 0, prime_video: 0, disney_plus: 0,
-  },
-  {
-    title: "Annihilation", year: 2018, content_type: "movie",
-    genres: "Horror, Science Fiction",
-    imdb_score: 6.8, similarity_score: 0.82,
-    netflix: 1, hulu: 0, prime_video: 0, disney_plus: 0,
-  },
-  {
-    title: "Dark", year: 2017, content_type: "tv",
-    genres: "Crime, Mystery, Science Fiction, Thriller",
-    imdb_score: 8.8, similarity_score: 0.81,
-    netflix: 1, hulu: 0, prime_video: 0, disney_plus: 0,
-  },
-  {
-    title: "Stranger Things", year: 2016, content_type: "tv",
-    genres: "Drama, Fantasy, Horror, Mystery",
-    imdb_score: 8.7, similarity_score: 0.78,
-    netflix: 1, hulu: 0, prime_video: 0, disney_plus: 0,
-  },
-  {
-    title: "The Midnight Club", year: 2022, content_type: "tv",
-    genres: "Drama, Horror, Mystery",
-    imdb_score: 7.1, similarity_score: 0.70,
-    netflix: 1, hulu: 0, prime_video: 0, disney_plus: 0,
-  },
-];
-
-/**
- * Mock detail data for the drawer — simulates GET /title/{name} responses.
- * Keyed by lowercase title. Each entry adds description, cast, and director
- * on top of the base data already in MOCK_DATA.
- *
- * TODO: API INTEGRATION — delete this and replace with a real fetch in handleSelect.
- */
-const MOCK_DETAIL = {
-  "inception": {
-    description: "A thief who steals corporate secrets through dream-sharing technology is given the inverse task of planting an idea into the mind of a C.E.O.",
-    cast: "Leonardo DiCaprio, Joseph Gordon-Levitt, Elliot Page, Tom Hardy",
-    director: "Christopher Nolan",
-  },
-  "interstellar": {
-    description: "A team of explorers travel through a wormhole in space in an attempt to ensure humanity's survival.",
-    cast: "Matthew McConaughey, Anne Hathaway, Jessica Chastain, Michael Caine",
-    director: "Christopher Nolan",
-  },
-  "the matrix": {
-    description: "A computer hacker learns from mysterious rebels about the true nature of his reality and his role in the war against its controllers.",
-    cast: "Keanu Reeves, Laurence Fishburne, Carrie-Anne Moss, Hugo Weaving",
-    director: "Lana Wachowski, Lilly Wachowski",
-  },
-  "arrival": {
-    description: "A linguist works with the military to communicate with alien lifeforms after twelve mysterious spacecrafts appear around the world.",
-    cast: "Amy Adams, Jeremy Renner, Forest Whitaker",
-    director: "Denis Villeneuve",
-  },
-  "severance": {
-    description: "Mark leads a team of office workers whose memories have been surgically divided between their work and personal lives.",
-    cast: "Adam Scott, Britt Lower, Zach Cherry, Patricia Arquette",
-    director: "Ben Stiller",
-  },
-  "blade runner 2049": {
-    description: "A young blade runner's discovery of a long-buried secret leads him to track down former blade runner Rick Deckard.",
-    cast: "Ryan Gosling, Harrison Ford, Ana de Armas, Sylvia Hoeks",
-    director: "Denis Villeneuve",
-  },
-  "ex machina": {
-    description: "A programmer is selected to participate in a ground-breaking experiment in artificial intelligence by evaluating the human qualities of a robot.",
-    cast: "Alicia Vikander, Domhnall Gleeson, Oscar Isaac",
-    director: "Alex Garland",
-  },
-  "dark": {
-    description: "A family saga with a supernatural twist, set in a German town where the disappearance of two young children exposes the double lives of four families.",
-    cast: "Louis Hofmann, Oliver Masucci, Karoline Eichhorn",
-    director: "Baran bo Odar",
-  },
-  "stranger things": {
-    description: "When a young boy disappears, his mother, a police chief and his friends must confront terrifying supernatural forces in order to get him back.",
-    cast: "Millie Bobby Brown, Winona Ryder, David Harbour, Finn Wolfhard",
-    director: "The Duffer Brothers",
-  },
-};
-
-// ---------------------------------------------------------------------------
 // Utility helpers
 // ---------------------------------------------------------------------------
 
 /**
  * Extracts which streaming platforms a result item is available on.
- * The API (and mock data) use binary flags (0 or 1) per platform column.
+ * The API returns binary flags (0 or 1) per platform column.
  *
- * @param {Object} item - A result object from MOCK_DATA or the real API
+ * @param {Object} item - A result object from POST /recommend
  * @returns {string[]} Array of platform keys, e.g. ["netflix", "hulu"]
  */
 function getPlatforms(item) {
@@ -214,43 +63,6 @@ function getPlatforms(item) {
   if (item.prime_video === 1) plats.push("prime_video");
   if (item.disney_plus === 1) plats.push("disney_plus");
   return plats;
-}
-
-/**
- * Filters mock results by active platform chip and search query.
- * Simulates what the backend does server-side when the real API is connected.
- *
- * TODO: API INTEGRATION — delete this function. Filtering moves to the
- * POST /recommend request body (platforms field + query string).
- *
- * @param {string} query        - Search string to filter titles by
- * @param {string} activeFilter - Active platform chip label (e.g. "Netflix")
- * @returns {Array} Filtered and sorted subset of MOCK_DATA
- */
-function getFilteredMockResults(query, activeFilter) {
-  let results = [...MOCK_DATA];
-
-  // Filter by search query (case-insensitive substring match on title/genres)
-  if (query.trim()) {
-    const q = query.toLowerCase();
-    results = results.filter(
-      (r) =>
-        r.title.toLowerCase().includes(q) ||
-        r.genres.toLowerCase().includes(q)
-    );
-
-    // If no direct matches, return all mock data (simulates "related" results)
-    if (results.length === 0) results = [...MOCK_DATA];
-  }
-
-  // Filter by platform chip
-  const platformKey = PLATFORM_KEY_MAP[activeFilter];
-  if (platformKey) {
-    results = results.filter((r) => r[platformKey] === 1);
-    if (results.length === 0) results = [...MOCK_DATA]; // fallback if nothing matches
-  }
-
-  return results;
 }
 
 // ---------------------------------------------------------------------------
@@ -311,14 +123,13 @@ function StarRating({ rating }) {
  * Active (drawer open): cyan outline ring.
  * Similarity badge shown only for scores >= 80%.
  *
- * @param {Object}   item     - Result object from MOCK_DATA or real API
+ * @param {Object}   item     - Result object from POST /recommend
  * @param {Function} onClick  - Called with item when card is clicked
  * @param {boolean}  isActive - Whether this card's drawer is currently open
  */
 function TitleCard({ item, onClick, isActive }) {
   const [hovered, setHovered] = useState(false);
   const initials = item.title.split(" ").slice(0, 2).map((w) => w[0]).join("").toUpperCase();
-  const platforms = getPlatforms(item);
   const simPct = item.similarity_score ? Math.round(item.similarity_score * 100) : null;
 
   return (
@@ -381,7 +192,7 @@ function TitleCard({ item, onClick, isActive }) {
           </div>
         </div>
 
-        {/* Similarity badge — only shown for high-confidence matches */}
+        {/* Similarity badge — only shown for high-confidence matches (>= 80%) */}
         {simPct >= 80 && (
           <div style={{
             position: "absolute", top: "8px", right: "8px",
@@ -410,13 +221,15 @@ function TitleCard({ item, onClick, isActive }) {
 
 /**
  * ScrollRow — labeled horizontal strip of TitleCards with arrow buttons.
+ * Shows skeleton placeholder cards while `loading` is true.
  *
  * @param {string}   label    - Row heading
  * @param {Array}    items    - Cards to render
  * @param {Function} onSelect - Passed to each TitleCard onClick
  * @param {string}   activeId - Title of the currently open drawer card
+ * @param {boolean}  loading  - When true, renders skeleton placeholders
  */
-function ScrollRow({ label, items, onSelect, activeId }) {
+function ScrollRow({ label, items, onSelect, activeId, loading }) {
   const ref = useRef(null);
   const scroll = (dir) => ref.current?.scrollBy({ left: dir * 600, behavior: "smooth" });
 
@@ -441,7 +254,20 @@ function ScrollRow({ label, items, onSelect, activeId }) {
           ))}
         </div>
       </div>
-      {items.length === 0 ? (
+
+      {/* Skeleton loading placeholders */}
+      {loading ? (
+        <div style={{ display: "flex", gap: "12px" }}>
+          {[...Array(6)].map((_, i) => (
+            <div key={i} style={{
+              flexShrink: 0, width: "148px", height: "210px", borderRadius: "6px",
+              background: "#0d0d0d", border: "1px solid #1a1a1a",
+              animation: "pulse 1.5s ease-in-out infinite",
+              animationDelay: `${i * 0.1}s`,
+            }} />
+          ))}
+        </div>
+      ) : items.length === 0 ? (
         <p style={{ fontSize: "13px", color: "#999", fontFamily: "inherit" }}>No results found.</p>
       ) : (
         <div ref={ref} style={{ display: "flex", gap: "12px", overflowX: "auto", paddingBottom: "8px", scrollbarWidth: "none" }}>
@@ -458,8 +284,8 @@ function ScrollRow({ label, items, onSelect, activeId }) {
  * DetailDrawer — slide-up panel showing full metadata for a selected title.
  *
  * Returns null when no item is selected (zero DOM footprint when closed).
- * Mock mode: description/cast comes from MOCK_DETAIL lookup by title.
- * Real API mode: these fields come directly from GET /title/{name}.
+ * On card click, the parent fetches GET /title/{name} for full detail
+ * (description, cast, director) and merges it onto the base result data.
  *
  * @param {Object|null} item    - Title detail object, or null to hide
  * @param {Function}    onClose - Called when the × button is clicked
@@ -481,6 +307,7 @@ function DetailDrawer({ item, onClose }) {
     }}>
       <style>{`
         @keyframes slideUp { from { transform: translateY(100%); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+        @keyframes pulse   { 0%,100% { opacity: 0.4; } 50% { opacity: 0.8; } }
       `}</style>
       <div style={{
         maxWidth: "900px", margin: "0 auto",
@@ -493,7 +320,7 @@ function DetailDrawer({ item, onClose }) {
               {item.title}
             </h3>
             <div style={{ display: "flex", alignItems: "center", gap: "10px", marginTop: "6px", flexWrap: "wrap" }}>
-              {item.year && <span style={{ fontSize: "13px", color: "#444", fontFamily: "inherit" }}>{item.year}</span>}
+              {item.year && <span style={{ fontSize: "13px", color: "#444", fontFamily: "inherit" }}>{Math.round(item.year)}</span>}
               <span style={{ fontSize: "13px", color: "#444" }}>·</span>
               <span style={{ fontSize: "11px", border: "1px solid #444", borderRadius: "3px", padding: "1px 6px", color: "#888", fontFamily: "inherit" }}>
                 {item.content_type === "tv" ? "TV Show" : "Movie"}
@@ -507,12 +334,14 @@ function DetailDrawer({ item, onClose }) {
             </div>
           </div>
 
+          {/* Description — present when detail was fetched from GET /title */}
           {item.description && (
             <p style={{ fontSize: "13px", color: "#aaa", lineHeight: 1.65, margin: "0 0 14px", fontFamily: "inherit" }}>
               {item.description}
             </p>
           )}
 
+          {/* Cast — present in full detail response */}
           {item.cast && (
             <div style={{ marginBottom: "12px" }}>
               <span style={{ fontSize: "11px", color: "#999", textTransform: "uppercase", letterSpacing: "0.08em", display: "block", marginBottom: "6px", fontFamily: "inherit", fontWeight: 600 }}>
@@ -578,15 +407,16 @@ function DetailDrawer({ item, onClose }) {
  * App — the browse/results page, rendered at "/browse".
  *
  * State:
- *   query        {string}      - Active search term (from URL param or nav input)
- *   inputValue   {string}      - Live value in the nav search input
- *   selected     {Object|null} - Last-clicked card (with detail merged in)
- *   activeFilter {string}      - Active platform chip label
- *
- * TODO: API INTEGRATION — when connecting the real backend, replace the
- * getFilteredMockResults() call and MOCK_DETAIL lookup in handleSelect with:
- *   1. fetch(`${API_BASE}/recommend`, { method: "POST", body: ... })
- *   2. fetch(`${API_BASE}/title/${encodeURIComponent(item.title)}`)
+ *   query             {string}      - Active search term (from URL param or nav input)
+ *   inputValue        {string}      - Live value in the nav search input
+ *   selected          {Object|null} - Last-clicked card (partial data from /recommend)
+ *   titleDetail       {Object|null} - Full detail merged from GET /title
+ *   activePlatforms   {Set}         - Platform keys currently toggled on
+ *   contentTypeFilter {string}      - "All" | "Movies" | "TV Shows"
+ *   minImdbFilter     {string}      - "Any" | "6+" | "7+" | "8+" | "9+"
+ *   results           {Array}       - Raw results from POST /recommend
+ *   loading           {boolean}     - True while /recommend is in-flight
+ *   error             {string|null} - Error message if fetch fails
  */
 export default function App() {
   const [searchParams] = useSearchParams();
@@ -597,20 +427,21 @@ export default function App() {
   const [query, setQuery]           = useState(initialQuery);
   const [inputValue, setInputValue] = useState(initialQuery);
   const [selected, setSelected]     = useState(null);
+  const [titleDetail, setTitleDetail] = useState(null);
+  const [results, setResults]       = useState([]);
+  const [loading, setLoading]       = useState(false);
+  const [error, setError]           = useState(null);
+
   /**
    * activePlatforms — Set of platform keys currently selected by the user.
-   * Empty set means "All" (no platform filter). Multiple platforms can be
-   * active simultaneously — clicking a chip toggles it on/off.
-   *
-   * Maps directly to the `platforms` array in POST /recommend request body.
-   * TODO: API INTEGRATION — spread [...activePlatforms] into the request body.
+   * Empty set means no platform filter. Multiple platforms can be active
+   * simultaneously — clicking a chip toggles it on/off.
+   * Passed as the `platforms` array in POST /recommend body.
    */
   const [activePlatforms, setActivePlatforms] = useState(new Set());
 
   /**
    * Toggles a platform chip on or off.
-   * If the chip is already active, removes it. Otherwise adds it.
-   *
    * @param {string} platformKey - e.g. "netflix", "hulu", "prime_video", "disney_plus"
    */
   const togglePlatform = (platformKey) => {
@@ -626,50 +457,97 @@ export default function App() {
   };
 
   /**
-   * Filter controls shown below the results headline.
-   * In mock mode these filter the results array client-side.
-   * TODO: API INTEGRATION — pass contentTypeFilter as `content_type` and
-   * minImdbFilter as `min_imdb` in the POST /recommend request body instead.
+   * Content type filter — passed as `content_type` in POST /recommend body.
+   * "All" means no content_type filter is sent.
    */
-  const [contentTypeFilter, setContentTypeFilter] = useState("All");  // "All" | "Movies" | "TV Shows"
-  const [minImdbFilter, setMinImdbFilter]         = useState("Any");  // "Any" | "6+" | "7+" | "8+" | "9+"
+  const [contentTypeFilter, setContentTypeFilter] = useState("All");
 
   /**
-   * Derives results from mock data, then applies all active filters.
-   * TODO: API INTEGRATION — replace with a useEffect that calls POST /recommend
-   * and move all filtering to the request body.
+   * Min IMDb filter — passed as `min_imdb` in POST /recommend body.
+   * "Any" means no min_imdb filter is sent.
    */
-  let results = getFilteredMockResults(query, "All");
-
-  // Apply platform filter — keep titles available on ANY of the selected platforms
-  if (activePlatforms.size > 0) {
-    results = results.filter((r) =>
-      [...activePlatforms].some((p) => r[p] === 1)
-    );
-    if (results.length === 0) results = getFilteredMockResults(query, "All"); // fallback
-  }
-
-  if (contentTypeFilter === "Movies")   results = results.filter((r) => r.content_type === "movie");
-  if (contentTypeFilter === "TV Shows") results = results.filter((r) => r.content_type === "tv");
-  if (minImdbFilter !== "Any") {
-    const minScore = parseFloat(minImdbFilter);
-    results = results.filter((r) => r.imdb_score && r.imdb_score >= minScore);
-  }
+  const [minImdbFilter, setMinImdbFilter] = useState("Any");
 
   /**
-   * Handles card click — looks up mock detail and merges it onto the item.
-   * TODO: API INTEGRATION — replace MOCK_DETAIL lookup with fetch to GET /title.
+   * Main recommendation fetch effect.
+   * Re-runs whenever query, activePlatforms, contentTypeFilter, or minImdbFilter changes.
+   *
+   * Sends POST /recommend with all active filters.
+   * On success: populates `results`.
+   * On failure: sets `error`.
    */
-  const handleSelect = (item) => {
+  useEffect(() => {
+    if (!query.trim()) return;
+
+    setLoading(true);
+    setError(null);
+    setSelected(null);
+    setTitleDetail(null);
+
+    // Build request body — only include optional filters when active
+    const body = {
+      query: query.trim(),
+      top_k: 40,
+      lambda_div: 0.3,
+      ...(activePlatforms.size > 0 ? { platforms: [...activePlatforms] } : {}),
+      ...(contentTypeFilter === "Movies" ? { content_type: "movie" } : {}),
+      ...(contentTypeFilter === "TV Shows" ? { content_type: "tv" } : {}),
+      ...(minImdbFilter !== "Any" ? { min_imdb: parseFloat(minImdbFilter) } : {}),
+    };
+
+    fetch(`${API_BASE}/recommend`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    })
+      .then((r) => r.json())
+      .then((data) => {
+        setResults(data.results || []);
+        setLoading(false);
+      })
+      .catch(() => {
+        setError("Couldn't reach the server. Check your connection and try again.");
+        setLoading(false);
+      });
+  }, [query, activePlatforms, contentTypeFilter, minImdbFilter]);
+
+  /**
+   * Handles card click.
+   * Clicking the same card again closes the drawer (toggle).
+   * Clicking a new card:
+   *   1. Sets `selected` immediately (drawer opens with partial data)
+   *   2. Fetches GET /title/{name} for full metadata
+   *   3. Merges full detail onto the partial result via `titleDetail`
+   * Falls back to partial data if the /title fetch fails.
+   */
+  const handleSelect = async (item) => {
     if (selected?.title === item.title) {
       setSelected(null);
+      setTitleDetail(null);
       return;
     }
-    const detail = MOCK_DETAIL[item.title.toLowerCase()] || {};
-    setSelected({ ...item, ...detail });
+    setSelected(item);
+    setTitleDetail(null);
+
+    try {
+      const res = await fetch(`${API_BASE}/title/${encodeURIComponent(item.title)}`);
+      if (res.ok) {
+        const detail = await res.json();
+        // Keep similarity_score from /recommend, add description/cast/director from /title
+        setTitleDetail({ ...item, ...detail });
+      } else {
+        setTitleDetail(item);
+      }
+    } catch {
+      setTitleDetail(item); // fallback to partial data on error
+    }
   };
 
-  /** Handles nav bar search form submission — updates query and URL param. */
+  /**
+   * Handles nav bar search form submission.
+   * Updates both the URL param (for shareability) and the `query` state
+   * that triggers the /recommend effect above.
+   */
   const handleSearchSubmit = (e) => {
     e.preventDefault();
     if (!inputValue.trim()) return;
@@ -677,17 +555,17 @@ export default function App() {
     navigate(`/browse?q=${encodeURIComponent(inputValue.trim())}`, { replace: true });
   };
 
-  // Derive row data by splitting filtered results into themed groups
+  // Derive row data by splitting flat results into themed groups
   const topMatches   = results.slice(0, 15);
   const movieResults = results.filter((r) => r.content_type === "movie");
   const tvResults    = results.filter((r) => r.content_type === "tv");
   const highRated    = results.filter((r) => r.imdb_score && r.imdb_score >= 8.0);
 
   const rows = query ? [
-    { label: `Best matches for "${query}"`,   items: topMatches   },
-    ...(contentTypeFilter === "All" && movieResults.length > 0 ? [{ label: "Movies",             items: movieResults }] : []),
-    ...(contentTypeFilter === "All" && tvResults.length    > 0 ? [{ label: "TV Shows",           items: tvResults    }] : []),
-    ...(highRated.length    > 0 ? [{ label: "Highly rated picks", items: highRated    }] : []),
+    { label: `Best matches for "${query}"`,    items: topMatches   },
+    ...(contentTypeFilter === "All" && movieResults.length > 0 ? [{ label: "Movies",              items: movieResults }] : []),
+    ...(contentTypeFilter === "All" && tvResults.length    > 0 ? [{ label: "TV Shows",            items: tvResults    }] : []),
+    ...(highRated.length    > 0                               ? [{ label: "Highly rated picks",   items: highRated    }] : []),
   ] : [];
 
   return (
@@ -717,9 +595,8 @@ export default function App() {
 
           <div style={{ flex: 1 }} />
 
-          {/* Search bar — wider, with a cyan arrow submit button on the right.
-               Platform chips have moved to the filter bar below the results headline
-               for consistency with the other filters. */}
+          {/* Search bar — wider, with cyan arrow submit button.
+               Platform chips are in the filter bar below for consistency. */}
           <form onSubmit={handleSearchSubmit}
             style={{ flexShrink: 0, width: "440px", display: "flex", gap: "8px", alignItems: "center" }}>
             <div style={{ position: "relative", flex: 1 }}>
@@ -740,7 +617,7 @@ export default function App() {
                 onBlur={(e) => (e.target.style.borderColor = "#1e1e1e")}
               />
             </div>
-            {/* Arrow button — turns cyan when input has a value, matches landing page CTA */}
+            {/* Arrow button — turns cyan when input has a value */}
             <button type="submit"
               style={{
                 flexShrink: 0,
@@ -774,12 +651,10 @@ export default function App() {
               Results for <span style={{ color: "#00E5FF" }}>"{query}"</span>
             </h1>
             <p style={{ fontSize: "14px", color: "#999", marginTop: "10px", marginBottom: 0 }}>
-              {results.length} titles found · Ranked by similarity
+              {loading ? "Finding recommendations…" : `${results.length} titles found · Ranked by similarity`}
             </p>
 
-            {/* Filter bar — shown only when there are results.
-                 Row 1: streaming platform chips (multi-select, moved from nav).
-                 Row 2: content type + min IMDb toggles. */}
+            {/* Filter bar — Row 1: platforms, Row 2: type + IMDb */}
             <div style={{ marginTop: "18px", display: "flex", flexDirection: "column", gap: "12px" }}>
 
               {/* ── Row 1: Platform chips ── */}
@@ -865,6 +740,13 @@ export default function App() {
                 )}
               </div>
             </div>
+
+            {/* Error banner */}
+            {error && (
+              <p style={{ fontSize: "13px", color: "#c0392b", marginTop: "16px", background: "#1a0a0a", border: "1px solid #3a1a1a", borderRadius: "6px", padding: "10px 14px" }}>
+                {error}
+              </p>
+            )}
           </>
         ) : (
           <>
@@ -892,6 +774,7 @@ export default function App() {
               items={row.items}
               onSelect={handleSelect}
               activeId={selected?.title}
+              loading={loading}
             />
           ))
         ) : (
@@ -906,7 +789,11 @@ export default function App() {
         )}
       </main>
 
-      <DetailDrawer item={selected} onClose={() => setSelected(null)} />
+      {/* Detail drawer — fixed at bottom, slides up on card click */}
+      <DetailDrawer
+        item={titleDetail || selected}
+        onClose={() => { setSelected(null); setTitleDetail(null); }}
+      />
     </div>
   );
 }

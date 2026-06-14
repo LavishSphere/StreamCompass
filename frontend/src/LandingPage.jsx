@@ -6,9 +6,9 @@
  *
  * Flow:
  *   1. User types a title (e.g. "Breaking Bad")
- *   2. As they type, we debounce-fetch /search from the backend for autocomplete
+ *   2. As they type, we debounce-fetch GET /search for autocomplete suggestions
  *   3. On Enter or suggestion click, we navigate to /browse?q=<query>
- *   4. The browse page (App.jsx) picks up the ?q= param and fires /recommend
+ *   4. The browse page (App.jsx) picks up the ?q= param and fires POST /recommend
  *
  * API endpoints used:
  *   GET /search?q={query}&limit=6  — autocomplete suggestions while typing
@@ -20,33 +20,8 @@
 import { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 
-/**
- * TODO: API INTEGRATION
- * Uncomment this when connecting the real backend:
- *   const API_BASE = "https://api.khayrul.com";
- */
-
-/**
- * Mock titles used for autocomplete suggestions while in mock data mode.
- * Simulates the shape of GET /search responses so the dropdown UI can
- * be tested without the backend running.
- *
- * TODO: API INTEGRATION — delete MOCK_SUGGESTIONS and replace the
- * useEffect below with a real fetch to GET /search?q=...&limit=6
- */
-const MOCK_SUGGESTIONS = [
-  { title: "Inception",         year: 2010, netflix: 1, hulu: 0, prime_video: 1, disney_plus: 0 },
-  { title: "Interstellar",      year: 2014, netflix: 0, hulu: 1, prime_video: 1, disney_plus: 0 },
-  { title: "The Matrix",        year: 1999, netflix: 1, hulu: 0, prime_video: 0, disney_plus: 0 },
-  { title: "Arrival",           year: 2016, netflix: 0, hulu: 1, prime_video: 1, disney_plus: 0 },
-  { title: "Severance",         year: 2022, netflix: 0, hulu: 0, prime_video: 0, disney_plus: 0 },
-  { title: "Blade Runner 2049", year: 2017, netflix: 0, hulu: 1, prime_video: 1, disney_plus: 0 },
-  { title: "Ex Machina",        year: 2014, netflix: 0, hulu: 0, prime_video: 1, disney_plus: 0 },
-  { title: "Dark",              year: 2017, netflix: 1, hulu: 0, prime_video: 0, disney_plus: 0 },
-  { title: "Stranger Things",   year: 2016, netflix: 1, hulu: 0, prime_video: 0, disney_plus: 0 },
-  { title: "Westworld",         year: 2016, netflix: 0, hulu: 0, prime_video: 0, disney_plus: 0 },
-  { title: "Annihilation",      year: 2018, netflix: 1, hulu: 0, prime_video: 0, disney_plus: 0 },
-];
+/** Base URL for all backend API calls. */
+const API_BASE = "https://api.khayrul.com";
 
 /**
  * Renders the StreamCompass compass SVG logo at a given pixel size.
@@ -92,11 +67,11 @@ function PlatformDot({ color, label }) {
  * LandingPage — main export
  *
  * State:
- *   query            {string}  - Current text in the search input
- *   suggestions      {Array}   - Autocomplete results from GET /search
- *   showSuggestions  {boolean} - Whether the dropdown is visible
+ *   query              {string}  - Current text in the search input
+ *   suggestions        {Array}   - Autocomplete results from GET /search
+ *   showSuggestions    {boolean} - Whether the dropdown is visible
  *   loadingSuggestions {boolean} - Spinner shown while /search is in-flight
- *   activeSuggestion {number}  - Keyboard-highlighted suggestion index (-1 = none)
+ *   activeSuggestion   {number}  - Keyboard-highlighted suggestion index (-1 = none)
  *
  * Refs:
  *   inputRef    - Direct DOM ref to the <input> so we can auto-focus on mount
@@ -121,28 +96,10 @@ export default function LandingPage() {
   /**
    * Autocomplete effect — fires whenever `query` changes.
    *
-   * MOCK MODE: filters MOCK_SUGGESTIONS client-side by substring match.
-   * No network call is made — works fully offline for UI testing.
-   *
-   * TODO: API INTEGRATION — replace the mock filter block below with a
-   * real debounced fetch to GET /search?q={query}&limit=6:
-   *
-   *   clearTimeout(debounceRef.current);
-   *   debounceRef.current = setTimeout(async () => {
-   *     setLoadingSuggestions(true);
-   *     try {
-   *       const res = await fetch(`${API_BASE}/search?q=${encodeURIComponent(query)}&limit=6`);
-   *       const data = await res.json();
-   *       setSuggestions(data.results || []);
-   *       setShowSuggestions(true);
-   *       setActiveSuggestion(-1);
-   *     } catch {
-   *       setSuggestions([]);
-   *     } finally {
-   *       setLoadingSuggestions(false);
-   *     }
-   *   }, 280);
-   *   return () => clearTimeout(debounceRef.current);
+   * Debounced by 280ms so we don't hammer the API on every keystroke.
+   * Skips the fetch if the query is fewer than 2 characters.
+   * Calls GET /search which returns titles whose normalised name contains
+   * the query string, sorted by exact-start matches first then IMDb score.
    */
   useEffect(() => {
     if (!query.trim() || query.length < 2) {
@@ -151,15 +108,29 @@ export default function LandingPage() {
       return;
     }
 
-    // Mock: filter suggestions client-side (no network, no debounce needed)
-    const q = query.toLowerCase();
-    const filtered = MOCK_SUGGESTIONS.filter((s) =>
-      s.title.toLowerCase().includes(q)
-    ).slice(0, 6);
+    // Cancel any pending debounce from the previous keystroke
+    clearTimeout(debounceRef.current);
 
-    setSuggestions(filtered);
-    setShowSuggestions(filtered.length > 0);
-    setActiveSuggestion(-1);
+    debounceRef.current = setTimeout(async () => {
+      setLoadingSuggestions(true);
+      try {
+        const res = await fetch(
+          `${API_BASE}/search?q=${encodeURIComponent(query)}&limit=6`
+        );
+        const data = await res.json();
+        setSuggestions(data.results || []);
+        setShowSuggestions(true);
+        setActiveSuggestion(-1);
+      } catch {
+        // Silently fail — autocomplete is a nice-to-have, not critical
+        setSuggestions([]);
+      } finally {
+        setLoadingSuggestions(false);
+      }
+    }, 280);
+
+    // Cleanup: cancel the debounce if the component unmounts mid-wait
+    return () => clearTimeout(debounceRef.current);
   }, [query]);
 
   /**
