@@ -34,7 +34,7 @@ PLATFORMS = ["netflix", "hulu", "prime_video", "disney_plus"]
 def _nn(value):
     """Return None if value is pandas/numpy NaN, otherwise return value as-is."""
     try:
-        return None if (value != value) else value
+        return None if pd.isna(value) else value
     except (TypeError, ValueError):
         return value
 
@@ -218,10 +218,10 @@ def get_recommendations(body: RecommendRequest):
     results = [
         TitleResult(
             title=str(row["title"]),
-            year=row["year"] if pd.notna(row["year"]) else None,
-            content_type=row.get("content_type"),
-            genres=row.get("genres"),
-            imdb_score=row["imdb_score"] if pd.notna(row.get("imdb_score")) else None,
+            year=_nn(row.get("year")),
+            content_type=_nn(row.get("content_type")),
+            genres=_nn(row.get("genres")),
+            imdb_score=_nn(row.get("imdb_score")),
             netflix=int(row["netflix"]),
             hulu=int(row["hulu"]),
             prime_video=int(row["prime_video"]),
