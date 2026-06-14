@@ -648,7 +648,7 @@ export default function App() {
         {query ? (
           <>
             <h1 style={{ fontSize: "32px", fontWeight: 700, color: "#fff", margin: 0, letterSpacing: "-0.02em", lineHeight: 1.1 }}>
-              Results for <span style={{ color: "#00E5FF" }}>"{query}"</span>
+              Results for <span style={{ color: "#00E5FF" }}>&quot;{query}&quot;</span>
             </h1>
             <p style={{ fontSize: "14px", color: "#999", marginTop: "10px", marginBottom: 0 }}>
               {loading ? "Finding recommendations…" : `${results.length} titles found · Ranked by similarity`}
