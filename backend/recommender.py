@@ -22,15 +22,47 @@ Usage:
 
 import heapq
 import re
+import weakref
 
 import numpy as np
 import pandas as pd
 from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
+from sklearn.utils.extmath import safe_sparse_dot
 
 # ---------------------------------------------------------------------------
 # Stage 1 — TF-IDF index
 # ---------------------------------------------------------------------------
+
+
+def _normalize_title(title: str) -> str:
+    """Normalize a title for exact and substring matching."""
+    return re.sub(r"\s+", " ", re.sub(r"[^\w\s]", "", str(title).lower())).strip()
+
+
+_TITLE_CACHE = {}
+
+
+def _cache_titles(df: pd.DataFrame):
+    """Cache normalized titles without attaching large objects to pandas attrs."""
+    cache_key = id(df)
+    cached = _TITLE_CACHE.get(cache_key)
+    if cached is not None and cached[0]() is df:
+        return cached[1], cached[2]
+
+    normalized_titles = [_normalize_title(title) for title in df["title"]]
+    title_lookup = {}
+    for idx, title in enumerate(normalized_titles):
+        title_lookup.setdefault(title, idx)
+
+    def clear_cache(_):
+        _TITLE_CACHE.pop(cache_key, None)
+
+    _TITLE_CACHE[cache_key] = (
+        weakref.ref(df, clear_cache),
+        normalized_titles,
+        title_lookup,
+    )
+    return normalized_titles, title_lookup
 
 
 def build_tfidf_index(df: pd.DataFrame):
@@ -52,8 +84,14 @@ def build_tfidf_index(df: pd.DataFrame):
         ngram_range=(1, 2),  # unigrams + bigrams capture phrases like "sci fi"
         max_features=20_000,
         sublinear_tf=True,  # replace raw TF with 1 + log(TF) to dampen outliers
+        dtype=np.float32,
     )
-    tfidf_matrix = vectorizer.fit_transform(df["tfidf_soup"].fillna(""))
+    tfidf_matrix = vectorizer.fit_transform(df["tfidf_soup"].fillna("")).tocsr()
+
+    # Cache title matching data once instead of normalizing the full corpus on
+    # every recommendation request.
+    _cache_titles(df)
+
     return vectorizer, tfidf_matrix
 
 
@@ -83,26 +121,18 @@ def ucs_retrieve(query_vec, tfidf_matrix, n_candidates: int = 50):
 
     Returns list of (corpus_index, similarity_score) sorted descending.
     """
-    # Cosine similarity: inner product of unit-normalised TF-IDF vectors.
-    # Shape: (n_titles,)
-    sims = cosine_similarity(query_vec, tfidf_matrix).flatten()
-
-    # Priority queue: cost = 1 - similarity so the most similar title has
-    # the lowest cost (cost 0 = identical, cost 1 = completely unrelated).
-    heap = [(1.0 - float(s), i) for i, s in enumerate(sims) if s > 0.0]
-    heapq.heapify(heap)  # O(n) in-place
-
-    visited = set()
-    candidates = []
-
-    # Expand nodes cheapest-first — identical to the UCS frontier expansion.
-    while heap and len(candidates) < n_candidates:
-        cost, idx = heapq.heappop(heap)  # O(log n)
-        if idx not in visited:
-            visited.add(idx)
-            candidates.append((idx, 1.0 - cost))  # store as (index, similarity)
-
-    return candidates  # sorted by similarity descending
+    # TF-IDF rows are L2-normalized, so their sparse dot product is cosine
+    # similarity. Keep the result sparse and retain only the best frontier
+    # nodes instead of materializing and heapifying all corpus scores.
+    similarities = safe_sparse_dot(query_vec, tfidf_matrix.T, dense_output=True).ravel()
+    positive = np.flatnonzero(similarities > 0.0)
+    scored = ((float(similarities[idx]), int(idx)) for idx in positive)
+    frontier = heapq.nlargest(
+        n_candidates,
+        scored,
+        key=lambda item: (item[0], -item[1]),
+    )
+    return [(idx, score) for score, idx in frontier]
 
 
 # ---------------------------------------------------------------------------
@@ -307,35 +337,29 @@ def mdp_rerank(candidates: list, tfidf_matrix, top_k: int = 10, lambda_div: floa
     if not candidates:
         return []
 
-    selected = []  # (corpus_index, final_score)
-    selected_vecs = []  # sparse row vectors of already-chosen titles
-    remaining = list(candidates)
+    indices = np.fromiter((idx for idx, _ in candidates), dtype=np.int64)
+    relevance = np.fromiter((score for _, score in candidates), dtype=float)
 
-    for _ in range(min(top_k, len(remaining))):
-        best_reward = -np.inf
-        best_pos = -1
+    # Compute all candidate-to-candidate similarities once. At most top_k * 3
+    # candidates reach this stage, so this dense matrix stays tiny.
+    candidate_matrix = tfidf_matrix[indices]
+    pairwise = (candidate_matrix @ candidate_matrix.T).toarray()
+    np.clip(pairwise, 0.0, 1.0, out=pairwise)
 
-        for pos, (idx, relevance) in enumerate(remaining):
-            if selected_vecs:
-                # Diversity penalty: max similarity to any already-chosen title
-                stacked = np.vstack([v.toarray() for v in selected_vecs])
-                div_penalty = float(cosine_similarity(tfidf_matrix[idx], stacked).max())
-            else:
-                div_penalty = 0.0  # first pick has no redundancy cost
+    selected = []
+    unavailable = np.zeros(len(candidates), dtype=bool)
+    max_similarity = np.zeros(len(candidates), dtype=float)
 
-            # MDP immediate reward: R(s, a)
-            reward = relevance - lambda_div * div_penalty
-
-            if reward > best_reward:
-                best_reward = reward
-                best_pos = pos
-
-        if best_pos < 0:
+    for _ in range(min(top_k, len(candidates))):
+        rewards = relevance - lambda_div * max_similarity
+        rewards[unavailable] = -np.inf
+        best_pos = int(np.argmax(rewards))
+        if not np.isfinite(rewards[best_pos]):
             break
 
-        chosen_idx, chosen_score = remaining.pop(best_pos)
-        selected.append((chosen_idx, chosen_score))
-        selected_vecs.append(tfidf_matrix[chosen_idx])  # keep sparse
+        unavailable[best_pos] = True
+        selected.append((int(indices[best_pos]), float(relevance[best_pos])))
+        max_similarity = np.maximum(max_similarity, pairwise[best_pos])
 
     return selected
 
@@ -354,20 +378,12 @@ def _build_features(candidates: list, df: pd.DataFrame) -> np.ndarray:
 
     Missing values are replaced with the column median before normalisation.
     """
-    rows = []
-    for idx, sim in candidates:
-        row = df.iloc[idx]
-        imdb = row.get("imdb_score")
-        pop = row.get("popularity")
-        rows.append(
-            [
-                float(sim),
-                float(imdb) if pd.notna(imdb) else np.nan,
-                float(pop) if pd.notna(pop) else np.nan,
-            ]
-        )
-
-    features = np.array(rows, dtype=float)
+    indices = [idx for idx, _ in candidates]
+    selected = df.iloc[indices]
+    similarities = np.fromiter((sim for _, sim in candidates), dtype=float)
+    imdb = pd.to_numeric(selected["imdb_score"], errors="coerce").to_numpy(dtype=float)
+    popularity = pd.to_numeric(selected["popularity"], errors="coerce").to_numpy(dtype=float)
+    features = np.column_stack((similarities, imdb, popularity))
 
     # Impute missing values with column median (guard against all-NaN columns)
     for col in (1, 2):
@@ -406,22 +422,19 @@ def _find_title_match(query: str, df: pd.DataFrame):
       2. First substring match   (e.g. "breaking bad s" still hits it)
     """
 
-    def _norm(t):
-        return re.sub(r"\s+", " ", re.sub(r"[^\w\s]", "", str(t).lower())).strip()
-
-    q = _norm(query)
-    normalised = df["title"].apply(_norm)
+    q = _normalize_title(query)
+    normalized_titles, title_lookup = _cache_titles(df)
 
     # Exact match first
-    exact = normalised[normalised == q]
-    if not exact.empty:
-        return exact.index[0]
+    exact = title_lookup.get(q)
+    if exact is not None:
+        return exact
 
     # Substring match: query fully contained in a title
-    sub = normalised[normalised.str.contains(q, regex=False)]
-    if not sub.empty:
-        # Prefer the shortest title (least extra words = closest match)
-        return sub.apply(len).idxmin()  # returns integer DataFrame index
+    matches = ((len(title), idx) for idx, title in enumerate(normalized_titles) if q in title)
+    closest = min(matches, default=None)
+    if closest is not None:
+        return closest[1]
 
     return None
 
