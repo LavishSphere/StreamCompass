@@ -92,7 +92,7 @@ class RecommendRequest(BaseModel):
     )
     min_imdb: Optional[float] = Field(None, ge=0.0, le=10.0, description="Minimum IMDb score")
     lambda_div: float = Field(
-        0.3, ge=0.0, le=1.0, description="Diversity weight (0=pure relevance, 1=max diversity)"
+        0.1, ge=0.0, le=1.0, description="Diversity weight (0=pure relevance, 1=max diversity)"
     )
 
 
@@ -107,6 +107,7 @@ class TitleResult(BaseModel):
     prime_video: int
     disney_plus: int
     similarity_score: float
+    match_breakdown: Optional[dict] = None
 
 
 class RecommendResponse(BaseModel):
@@ -179,7 +180,8 @@ def get_recommendations(body: RecommendRequest):
 
     Accepts a title or free-text query and returns the top-K most similar
     titles, optionally filtered by content type, platform, and IMDb score.
-    The diversity of results is tunable via lambda_div.
+    lambda_div is accepted for compatibility, but MDP diversity re-ranking is
+    currently disabled in the recommender.
     """
     # Validate platform names if provided
     if body.platforms:
@@ -227,6 +229,7 @@ def get_recommendations(body: RecommendRequest):
             prime_video=int(row["prime_video"]),
             disney_plus=int(row["disney_plus"]),
             similarity_score=float(row["similarity_score"]),
+            match_breakdown=_nn(row.get("match_breakdown")),
         )
         for _, row in results_df.iterrows()
     ]
