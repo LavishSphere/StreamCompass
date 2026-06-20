@@ -9,7 +9,7 @@ Each stage of the pipeline maps to a concept from CS 4100:
   Stage 4  LinearScorer           — Linear Regression + Gradient Descent
   Stage 5  sigmoid / relevance    — Classification: logistic / sigmoid function
   Stage 6  SimpleNN               — Neural Networks: 2-layer feed-forward scorer
-  Stage 7  MDP re-ranking         — Markov Decision Process: greedy diversity policy
+  Stage 7  MDP re-ranking         — optional Markov Decision Process diversity policy
 
 Usage:
     from data_loader import load_data
@@ -26,12 +26,20 @@ import weakref
 
 import numpy as np
 import pandas as pd
+from scipy.sparse import hstack
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.utils.extmath import safe_sparse_dot
 
 # ---------------------------------------------------------------------------
 # Stage 1 — TF-IDF index
 # ---------------------------------------------------------------------------
+
+TFIDF_FIELD_WEIGHTS = {
+    "description": 0.50,
+    "genres": 0.30,
+    "cast": 0.10,
+    "director": 0.10,
+}
 
 
 def _normalize_title(title: str) -> str:
@@ -67,32 +75,92 @@ def _cache_titles(df: pd.DataFrame):
 
 def build_tfidf_index(df: pd.DataFrame):
     """
-    Build a TF-IDF matrix over the pre-built `tfidf_soup` column.
+    Build separate TF-IDF matrices for the fields that define content match.
 
     TF-IDF (Term Frequency x Inverse Document Frequency) assigns each word a
     weight that reflects how important it is to a document relative to the
-    whole corpus.  Words like "the" get near-zero weight; genre labels that
-    were double-weighted in data_loader score higher.
+    whole corpus.  We keep description, genres, cast, and director in separate
+    vector spaces, then combine them with explicit weights. This is cleaner
+    than repeating text in one soup because each field's influence is tunable
+    and explainable.
 
     Returns
     -------
-    vectorizer   : fitted TfidfVectorizer  (needed to encode arbitrary queries)
-    tfidf_matrix : sparse (n_titles, n_features) matrix
+    vectorizer   : dict of fitted field vectorizers and matrices
+    tfidf_matrix : sparse weighted matrix used for fast retrieval/re-ranking
     """
-    vectorizer = TfidfVectorizer(
-        stop_words="english",
-        ngram_range=(1, 2),  # unigrams + bigrams capture phrases like "sci fi"
-        max_features=20_000,
-        sublinear_tf=True,  # replace raw TF with 1 + log(TF) to dampen outliers
-        dtype=np.float32,
-    )
-    tfidf_matrix = vectorizer.fit_transform(df["tfidf_soup"].fillna("")).tocsr()
+    field_vectorizers = {}
+    field_matrices = {}
+    weighted_matrices = []
+
+    for field, weight in TFIDF_FIELD_WEIGHTS.items():
+        vectorizer = TfidfVectorizer(
+            stop_words="english",
+            ngram_range=(1, 2),  # unigrams + bigrams capture phrases like "sci fi"
+            max_features=12_000,
+            sublinear_tf=True,  # replace raw TF with 1 + log(TF) to dampen outliers
+            dtype=np.float32,
+        )
+        text = df[field].fillna("").astype(str).str.replace(",", " ", regex=False)
+        matrix = vectorizer.fit_transform(text).tocsr()
+        field_vectorizers[field] = vectorizer
+        field_matrices[field] = matrix
+        weighted_matrices.append(matrix * np.sqrt(weight))
+
+    tfidf_matrix = hstack(weighted_matrices, format="csr")
+    vectorizer = {
+        "fields": field_vectorizers,
+        "matrices": field_matrices,
+        "weights": TFIDF_FIELD_WEIGHTS,
+    }
 
     # Cache title matching data once instead of normalizing the full corpus on
     # every recommendation request.
     _cache_titles(df)
 
     return vectorizer, tfidf_matrix
+
+
+def _build_query_vector(query: str, vectorizer: dict, title_match_idx=None):
+    """Build weighted combined query vector plus per-field query vectors."""
+    query_vectors = {}
+    weighted_vectors = []
+
+    for field, weight in vectorizer["weights"].items():
+        if title_match_idx is not None:
+            field_vec = vectorizer["matrices"][field][title_match_idx]
+        else:
+            field_vec = vectorizer["fields"][field].transform([query])
+        query_vectors[field] = field_vec
+        weighted_vectors.append(field_vec * np.sqrt(weight))
+
+    return hstack(weighted_vectors, format="csr"), query_vectors
+
+
+def _tfidf_match_details(indices: list, query_vectors: dict, vectorizer: dict) -> dict:
+    """Return per-title TF-IDF field scores and weighted content similarity."""
+    if not indices:
+        return {}
+
+    details = {int(idx): {} for idx in indices}
+    for field, weight in vectorizer["weights"].items():
+        sims = safe_sparse_dot(
+            query_vectors[field],
+            vectorizer["matrices"][field][indices].T,
+            dense_output=True,
+        ).ravel()
+        for idx, sim in zip(indices, sims):
+            idx = int(idx)
+            raw = float(np.clip(sim, 0.0, 1.0))
+            details[idx][field] = raw
+            details[idx][f"{field}_weighted"] = raw * weight
+
+    for idx, values in details.items():
+        values["tfidf_similarity"] = float(
+            sum(values[f"{field}_weighted"] for field in vectorizer["weights"])
+        )
+
+    return details
 
 
 # ---------------------------------------------------------------------------
@@ -174,10 +242,11 @@ class LinearScorer:
     =================================================
     Relevance score as a weighted linear combination of features:
 
-        score(x) = w0*similarity + w1*imdb_norm + w2*popularity_norm
+        score(x) = w0*tfidf_similarity + w1*imdb_norm + w2*popularity_norm
                  = w^T x
 
-    Weights are initialized from domain knowledge (similarity dominates).
+    Weights are initialized from domain knowledge: TF-IDF content similarity
+    should dominate, while IMDb score and popularity act as tie-breakers.
     The `gradient_step` method shows how they would be refined via gradient
     descent on MSE loss if user watch/skip labels were available:
 
@@ -187,8 +256,8 @@ class LinearScorer:
     """
 
     def __init__(self, weights=None, learning_rate: float = 0.01):
-        # [similarity_weight, imdb_weight, popularity_weight]
-        self.weights = np.array(weights or [0.60, 0.30, 0.10], dtype=float)
+        # [tfidf_similarity_weight, imdb_weight, popularity_weight]
+        self.weights = np.array(weights or [0.75, 0.20, 0.05], dtype=float)
         self.lr = learning_rate
 
     def score(self, features: np.ndarray) -> np.ndarray:
@@ -316,7 +385,7 @@ class SimpleNN:
 # ---------------------------------------------------------------------------
 
 
-def mdp_rerank(candidates: list, tfidf_matrix, top_k: int = 10, lambda_div: float = 0.3) -> list:
+def mdp_rerank(candidates: list, tfidf_matrix, top_k: int = 10, lambda_div: float = 0.1) -> list:
     """
     MARKOV DECISION PROCESS — CS 4100
     ====================================
@@ -330,9 +399,11 @@ def mdp_rerank(candidates: list, tfidf_matrix, top_k: int = 10, lambda_div: floa
 
     The greedy policy is approximately optimal here because rewards are
     decomposable — the diversity penalty only subtracts, never defers value.
-    lambda_div controls the exploration/exploitation trade-off:
+    lambda_div controls the relevance/diversity trade-off:
         lambda = 0  -> pure relevance (no diversity)
         lambda = 1  -> maximum diversity
+    The default is intentionally gentle so recommendations stay close to the
+    query while avoiding a final list of near-duplicates.
     """
     if not candidates:
         return []
@@ -407,6 +478,37 @@ def _build_features(candidates: list, df: pd.DataFrame) -> np.ndarray:
     return features
 
 
+def _quality_match_details(indices: list, df: pd.DataFrame) -> dict:
+    """Normalize IMDb and popularity signals for API score explanations."""
+    if not indices:
+        return {}
+
+    selected = df.iloc[indices]
+    imdb = pd.to_numeric(selected["imdb_score"], errors="coerce").to_numpy(dtype=float)
+    popularity = pd.to_numeric(selected["popularity"], errors="coerce").to_numpy(dtype=float)
+
+    imdb = np.nan_to_num(imdb, nan=0.0)
+    imdb_norm = np.clip(imdb / 10.0, 0.0, 1.0)
+
+    if np.isnan(popularity).all():
+        popularity_norm = np.zeros(len(indices), dtype=float)
+    else:
+        popularity = np.nan_to_num(popularity, nan=float(np.nanmedian(popularity)))
+        p_min, p_max = popularity.min(), popularity.max()
+        if p_max > p_min:
+            popularity_norm = (popularity - p_min) / (p_max - p_min)
+        else:
+            popularity_norm = np.zeros(len(indices), dtype=float)
+
+    return {
+        int(idx): {
+            "imdb": float(imdb_value),
+            "popularity": float(pop_value),
+        }
+        for idx, imdb_value, pop_value in zip(indices, imdb_norm, popularity_norm)
+    }
+
+
 # ---------------------------------------------------------------------------
 # Title match lookup
 # ---------------------------------------------------------------------------
@@ -454,19 +556,20 @@ _RESULT_COLS = [
     "prime_video",
     "disney_plus",
     "similarity_score",
+    "match_breakdown",
 ]
 
 
 def recommend(
     query: str,
     df: pd.DataFrame,
-    vectorizer: TfidfVectorizer,
+    vectorizer: dict,
     tfidf_matrix,
     top_k: int = 10,
     content_type: str = None,
     platforms: list = None,
     min_imdb: float = None,
-    lambda_div: float = 0.3,
+    lambda_div: float = 0.1,
 ) -> pd.DataFrame:
     """
     End-to-end recommendation pipeline.
@@ -480,20 +583,20 @@ def recommend(
     5. Linear scorer  -> weighted feature combination      (Linear Regression)
     6. Sigmoid        -> relevance probabilities           (Logistic Regression)
     7. Neural network -> non-linear re-scoring             (Neural Networks)
-    8. MDP re-rank    -> diversity-aware final selection   (MDP)
+    8. Final trim     -> top-K score-ordered selection
 
     Parameters
     ----------
     query        : free-text search string
     df           : master DataFrame from data_loader.load_data()
-    vectorizer   : fitted TfidfVectorizer from build_tfidf_index()
-    tfidf_matrix : sparse TF-IDF matrix from build_tfidf_index()
+    vectorizer   : field TF-IDF index from build_tfidf_index()
+    tfidf_matrix : sparse weighted TF-IDF matrix from build_tfidf_index()
     top_k        : number of results to return (default 10)
     content_type : "movie" or "tv" (optional filter)
     platforms    : list of platform column names to filter on,
                    e.g. ["netflix", "disney_plus"]
     min_imdb     : minimum IMDb score threshold (optional)
-    lambda_div   : MDP diversity weight in [0, 1]
+    lambda_div   : optional MDP diversity weight in [0, 1]; currently unused
 
     Returns
     -------
@@ -503,17 +606,19 @@ def recommend(
     if not query or not query.strip():
         return pd.DataFrame(columns=_RESULT_COLS)
 
-    # ---- Title match: if query is a known title, seed from its TF-IDF row ----
+    # ---- Title match: if query is a known title, seed from its TF-IDF rows ----
     # This ensures "Breaking Bad" uses Breaking Bad's own description/cast/genres
     # as the similarity seed rather than the raw words "breaking" and "bad".
-    # Falls back to text encoding if the matched title has no content (empty soup).
+    # Falls back to text encoding if the matched title has no content.
     title_match_idx = _find_title_match(query.strip(), df)
     if title_match_idx is not None and tfidf_matrix[title_match_idx].nnz > 0:
-        query_vec = tfidf_matrix[title_match_idx]
+        query_vec, query_field_vecs = _build_query_vector(
+            query.strip(), vectorizer, title_match_idx=title_match_idx
+        )
     else:
         title_match_idx = None  # treat as plain text query
         # ---- Stage 1: encode free-text query into TF-IDF space ----
-        query_vec = vectorizer.transform([query.strip()])
+        query_vec, query_field_vecs = _build_query_vector(query.strip(), vectorizer)
         if query_vec.nnz == 0:
             # All query terms are unknown — zero vector, cannot retrieve anything
             return pd.DataFrame(columns=_RESULT_COLS)
@@ -527,6 +632,12 @@ def recommend(
         candidates = [(i, s) for i, s in candidates if i != title_match_idx]
     if not candidates:
         return pd.DataFrame(columns=_RESULT_COLS)
+
+    score_details = _tfidf_match_details(
+        [idx for idx, _ in candidates],
+        query_field_vecs,
+        vectorizer,
+    )
 
     # ---- Stage 3: hard filters ----
     if content_type:
@@ -550,6 +661,10 @@ def recommend(
         ]
     if not candidates:
         return pd.DataFrame(columns=_RESULT_COLS)
+
+    quality_details = _quality_match_details([idx for idx, _ in candidates], df)
+    for idx, details in quality_details.items():
+        score_details.setdefault(idx, {}).update(details)
 
     # ---- Stage 4: Bayesian scoring ----
     candidates = [(i, bayesian_score(s, df.iloc[i].get("imdb_score"))) for i, s in candidates]
@@ -579,14 +694,41 @@ def recommend(
     ]
     candidates.sort(key=lambda x: x[1], reverse=True)
 
-    # ---- Stage 8: MDP diversity re-ranking ----
-    final = mdp_rerank(candidates, tfidf_matrix, top_k=top_k, lambda_div=lambda_div)
+    # ---- Stage 8: score-ordered final selection ----
+    # MDP diversity re-ranking is intentionally disabled for now so results
+    # stay as close as possible to the weighted TF-IDF/content score.
+    # final = mdp_rerank(candidates, tfidf_matrix, top_k=top_k, lambda_div=lambda_div)
+    final = candidates[:top_k]
 
-    return _format_results(final, df)
+    return _format_results(final, df, score_details)
 
 
-def _format_results(ranked: list, df: pd.DataFrame) -> pd.DataFrame:
+def _format_match_breakdown(idx: int, score: float, score_details: dict) -> dict:
+    """Shape score details for the API/frontend."""
+    details = score_details.get(idx, {})
+    weights = LinearScorer().weights
+    return {
+        "final_score": round(float(score), 4),
+        "content_similarity": round(float(details.get("tfidf_similarity", 0.0)), 4),
+        "description": round(float(details.get("description", 0.0)), 4),
+        "genres": round(float(details.get("genres", 0.0)), 4),
+        "cast": round(float(details.get("cast", 0.0)), 4),
+        "director": round(float(details.get("director", 0.0)), 4),
+        "imdb": round(float(details.get("imdb", 0.0)), 4),
+        "popularity": round(float(details.get("popularity", 0.0)), 4),
+        "content_weight": round(float(weights[0]), 4),
+        "imdb_weight": round(float(weights[1]), 4),
+        "popularity_weight": round(float(weights[2]), 4),
+        **{
+            f"{field}_weight": round(float(weight), 4)
+            for field, weight in TFIDF_FIELD_WEIGHTS.items()
+        },
+    }
+
+
+def _format_results(ranked: list, df: pd.DataFrame, score_details: dict = None) -> pd.DataFrame:
     """Pack ranked (index, score) pairs into a clean result DataFrame."""
+    score_details = score_details or {}
     rows = []
     for idx, score in ranked:
         row = df.iloc[idx]
@@ -602,6 +744,7 @@ def _format_results(ranked: list, df: pd.DataFrame) -> pd.DataFrame:
                 "prime_video": int(row.get("prime_video") or 0),
                 "disney_plus": int(row.get("disney_plus") or 0),
                 "similarity_score": round(score, 4),
+                "match_breakdown": _format_match_breakdown(idx, score, score_details),
             }
         )
     return pd.DataFrame(rows, columns=_RESULT_COLS)

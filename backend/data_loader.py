@@ -358,8 +358,7 @@ def load_data(include_orphans: bool = True) -> pd.DataFrame:
         if row.get("description") and pd.notna(row["description"]):
             parts.append(str(row["description"]))
         if row.get("genres") and pd.notna(row["genres"]):
-            g = str(row["genres"]).replace(",", " ")
-            parts.extend([g, g])  # double-weight genres
+            parts.append(str(row["genres"]).replace(",", " "))
         if row.get("cast") and pd.notna(row["cast"]):
             parts.append(str(row["cast"]))
         if row.get("director") and pd.notna(row["director"]):
