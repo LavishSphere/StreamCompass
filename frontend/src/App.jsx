@@ -121,14 +121,13 @@ function StarRating({ rating }) {
  * cast, director) has its own similarity score shown as a bar.
  *
  * @param {Object} breakdown - item.match_breakdown from POST /recommend
- * @param {number} simPct    - Overall similarity percentage (0–100)
  */
 // App font stack — set explicitly on the tooltip because it renders through a
 // portal into document.body, outside the root div, so "inherit" would fall
 // back to the browser default serif font instead of the app font.
 const APP_FONT = "-apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans-serif";
 
-function MatchTooltip({ breakdown, simPct }) {
+function MatchTooltip({ breakdown }) {
   if (!breakdown) {
     return (
       <div style={{
@@ -437,7 +436,7 @@ function TitleCard({ item, onClick, isActive }) {
               transform: "translateX(-50%)",
               zIndex: 1000,
             }}>
-              <MatchTooltip breakdown={item.match_breakdown} simPct={simPct} />
+              <MatchTooltip breakdown={item.match_breakdown} />
             </div>,
             document.body
           )}
@@ -546,7 +545,7 @@ function DrawerMatchBadge({ item }) {
       </span>
       {hovered && (
         <div style={{ position: "absolute", bottom: "calc(100% + 6px)", left: 0, zIndex: 200 }}>
-          <MatchTooltip breakdown={item.match_breakdown} simPct={simPct} />
+          <MatchTooltip breakdown={item.match_breakdown} />
         </div>
       )}
     </div>
