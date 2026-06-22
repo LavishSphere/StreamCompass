@@ -388,9 +388,8 @@ def _build_poster_cache(df: pd.DataFrame) -> pd.Series:
 
     # Build a unique key per row: "title||year||content_type"
     def _cache_key(row):
-        return f"{
-            str(row['title']).lower().strip()}||{row.get('year', '')}||{row.get('content_type', '')
-                                                                        }"
+        title_key = str(row['title']).lower().strip()
+        return f"{title_key}||{row.get('year', '')}||{row.get('content_type', '')}"
 
     keys = df.apply(_cache_key, axis=1)
     missing_mask = ~keys.isin(cache)
