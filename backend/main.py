@@ -34,8 +34,14 @@ PLATFORMS = ["netflix", "hulu", "prime_video", "disney_plus"]
 def _nn(value):
     """Return None if value is pandas/numpy NaN, otherwise return value as-is."""
     try:
-        return None if pd.isna(value) else value
+        if pd.isna(value):
+            return None
     except (TypeError, ValueError):
+        pass
+
+    try:
+        return value.item()
+    except AttributeError:
         return value
 
 
@@ -102,6 +108,7 @@ class TitleResult(BaseModel):
     content_type: Optional[str]
     genres: Optional[str]
     imdb_score: Optional[float]
+    poster_url: Optional[str] = None
     netflix: int
     hulu: int
     prime_video: int
@@ -162,6 +169,7 @@ def search(
                 "content_type": _nn(row.get("content_type")),
                 "genres": _nn(row.get("genres")),
                 "imdb_score": _nn(row.get("imdb_score")),
+                "poster_url": _nn(row.get("poster_url")),
                 "netflix": int(row.get("netflix") or 0),
                 "hulu": int(row.get("hulu") or 0),
                 "prime_video": int(row.get("prime_video") or 0),
@@ -224,6 +232,7 @@ def get_recommendations(body: RecommendRequest):
             content_type=_nn(row.get("content_type")),
             genres=_nn(row.get("genres")),
             imdb_score=_nn(row.get("imdb_score")),
+            poster_url=_nn(row.get("poster_url")),
             netflix=int(row["netflix"]),
             hulu=int(row["hulu"]),
             prime_video=int(row["prime_video"]),
@@ -270,6 +279,7 @@ def get_title(title: str):
         "imdb_score": _nn(row.get("imdb_score")),
         "rotten_tomatoes": _nn(row.get("rotten_tomatoes")),
         "age_rating": _nn(row.get("age_rating")),
+        "poster_url": _nn(row.get("poster_url")),
         "netflix": int(row.get("netflix") or 0),
         "hulu": int(row.get("hulu") or 0),
         "prime_video": int(row.get("prime_video") or 0),
