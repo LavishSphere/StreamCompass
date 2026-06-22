@@ -15,6 +15,7 @@
  */
 
 import { useState, useRef, useEffect } from "react";
+import { createPortal } from "react-dom";
 import { useNavigate, useSearchParams } from "react-router-dom";
 
 /** Base URL for all backend API calls. */
@@ -122,15 +123,20 @@ function StarRating({ rating }) {
  * @param {Object} breakdown - item.match_breakdown from POST /recommend
  * @param {number} simPct    - Overall similarity percentage (0–100)
  */
+// App font stack — set explicitly on the tooltip because it renders through a
+// portal into document.body, outside the root div, so "inherit" would fall
+// back to the browser default serif font instead of the app font.
+const APP_FONT = "-apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans-serif";
+
 function MatchTooltip({ breakdown, simPct }) {
   if (!breakdown) {
     return (
       <div style={{
-        position: "absolute", top: "calc(100% + 6px)", right: 0,
-        background: "#0d0d0d", border: "1px solid #333",
-        borderRadius: "8px", padding: "10px 12px",
-        width: "180px", zIndex: 200,
-        boxShadow: "0 8px 24px rgba(0,0,0,0.6)",
+        width: "420px", background: "#0d0d0d", border: "1px solid #333",
+        borderRadius: "8px", padding: "14px 16px",
+        boxSizing: "border-box", zIndex: 200,
+        display: "flex", alignItems: "center", justifyContent: "center",
+        boxShadow: "0 8px 24px rgba(0,0,0,0.6)", fontFamily: APP_FONT,
       }}>
         <p style={{ fontSize: "11px", color: "#555", margin: 0, fontFamily: "inherit" }}>
           Match breakdown not available
@@ -139,67 +145,136 @@ function MatchTooltip({ breakdown, simPct }) {
     );
   }
 
+  // All values from item.match_breakdown, with ?? 0 fallbacks.
+  const finalScore       = breakdown.final_score ?? 0;
+  const contentSimilarity = breakdown.content_similarity ?? 0;
+  const imdb             = breakdown.imdb ?? 0;
+  const popularity       = breakdown.popularity ?? 0;
+  const contentWeight    = breakdown.content_weight ?? 0;
+  const imdbWeight       = breakdown.imdb_weight ?? 0;
+  const popularityWeight = breakdown.popularity_weight ?? 0;
+
+  const sectionHeading = {
+    fontSize: "10px", color: "#888", fontWeight: 700,
+    letterSpacing: "0.07em", textTransform: "uppercase",
+    fontFamily: "inherit",
+  };
+
+  // Left column: per-signal contribution rows (weight × value).
+  const contentContribution    = contentWeight * contentSimilarity;
+  const imdbContribution        = imdbWeight * imdb;
+  const popularityContribution  = popularityWeight * popularity;
+  const linearTotal             = contentContribution + imdbContribution + popularityContribution;
+
+  const scoreRows = [
+    {
+      label: "Content",
+      contribution: contentContribution,
+      subtitle: `weight × similarity = ${contentWeight} × ${contentSimilarity.toFixed(2)}`,
+    },
+    {
+      label: "IMDb",
+      contribution: imdbContribution,
+      subtitle: `weight × score = ${imdbWeight} × ${imdb.toFixed(2)}`,
+    },
+    {
+      label: "Popularity",
+      contribution: popularityContribution,
+      subtitle: `weight × rank = ${popularityWeight} × ${popularity.toFixed(2)}`,
+    },
+  ];
+
+  // Right column: raw TF-IDF field similarity bars.
   const fields = [
-    { key: "description", label: "Description", weight: breakdown.description_weight || 0.50 },
-    { key: "genres",      label: "Genres",      weight: breakdown.genres_weight      || 0.30 },
-    { key: "cast",        label: "Cast",         weight: breakdown.cast_weight        || 0.10 },
-    { key: "director",    label: "Director",     weight: breakdown.director_weight    || 0.10 },
+    { key: "description", label: "Description" },
+    { key: "genres",      label: "Genres" },
+    { key: "cast",        label: "Cast" },
+    { key: "director",    label: "Director" },
   ];
 
   return (
     <div style={{
-      background: "#0d0d0d", border: "1px solid #333",
-      borderRadius: "8px", padding: "12px",
-      width: "148px", zIndex: 200,
-      boxShadow: "0 8px 24px rgba(0,0,0,0.6)",
-      fontFamily: "inherit",
+      width: "420px", background: "#0d0d0d", border: "1px solid #333",
+      borderRadius: "8px", padding: "14px 16px",
+      display: "flex", gap: "16px", alignItems: "stretch",
+      overflow: "hidden", boxSizing: "border-box",
+      boxShadow: "0 8px 24px rgba(0,0,0,0.6)", fontFamily: APP_FONT,
     }}
       onClick={(e) => e.stopPropagation()}
     >
-      <div style={{ marginBottom: "10px" }}>
-        <span style={{ fontSize: "11px", color: "#999", fontWeight: 600, letterSpacing: "0.06em", textTransform: "uppercase" }}>
-          Why {simPct}% match?
-        </span>
-      </div>
+      {/* ── Left column: final score + contribution breakdown ── */}
+      <div style={{
+        flex: "0 0 190px", borderRight: "1px solid #2a2a2a", paddingRight: "16px",
+        display: "flex", flexDirection: "column",
+      }}>
+        {/* Top block — final score */}
+        <div>
+          <div style={{ ...sectionHeading, marginBottom: "4px" }}>Final Score</div>
+          <div style={{ fontSize: "24px", color: "#00E5FF", fontWeight: 700, fontFamily: "inherit", lineHeight: 1, marginBottom: "4px" }}>
+            {Math.round(finalScore * 100)}%
+          </div>
+          <div style={{ fontSize: "9px", color: "#888", fontStyle: "italic", fontFamily: "inherit" }}>
+            refined by neural network scoring
+          </div>
+        </div>
 
-      <div style={{ display: "flex", flexDirection: "column", gap: "7px" }}>
-        {fields.map(({ key, label }) => {
-          const raw = breakdown[key] || 0;
-          const barWidth = Math.min(100, Math.round(raw * 100));
-          return (
-            <div key={key}>
-              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "3px" }}>
-                <span style={{ fontSize: "10px", color: "#aaa", fontFamily: "inherit" }}>{label}</span>
-                <span style={{ fontSize: "10px", color: "#00E5FF", fontFamily: "inherit", fontWeight: 600 }}>
-                  {barWidth}%
+        {/* Divider */}
+        <div style={{ borderTop: "1px solid #2a2a2a", margin: "10px 0" }} />
+
+        {/* Bottom block — component contributions + linear total */}
+        <div style={{ display: "flex", flexDirection: "column", justifyContent: "space-between", flex: 1, gap: "8px" }}>
+          {scoreRows.map(({ label, contribution, subtitle }) => (
+            <div key={label}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+                <span style={{ fontSize: "10px", color: "#ccc", fontWeight: 600, fontFamily: "inherit" }}>{label}</span>
+                <span style={{ fontSize: "10px", color: "#00E5FF", fontWeight: 700, fontFamily: "inherit" }}>
+                  {(contribution * 100).toFixed(0)}%
                 </span>
               </div>
-              <div style={{ height: "4px", background: "#1e1e1e", borderRadius: "2px", overflow: "hidden" }}>
-                <div style={{
-                  height: "100%",
-                  width: `${barWidth}%`,
-                  background: barWidth > 60 ? "#00E5FF" : barWidth > 30 ? "#4dd0e1" : "#1e6b78",
-                  borderRadius: "2px",
-                  transition: "width 0.3s ease",
-                }} />
+              <div style={{ fontSize: "9px", color: "#888", fontFamily: "inherit", marginTop: "1px" }}>
+                {subtitle}
               </div>
             </div>
-          );
-        })}
+          ))}
+
+          {/* Linear total */}
+          <div style={{ borderTop: "1px solid #2a2a2a", paddingTop: "6px", display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+            <span style={{ fontSize: "9px", color: "#888", fontFamily: "inherit" }}>Linear total</span>
+            <span style={{ fontSize: "9px", color: "#00E5FF", fontWeight: 700, fontFamily: "inherit" }}>
+              {(linearTotal * 100).toFixed(0)}%
+            </span>
+          </div>
+        </div>
       </div>
 
-      <div style={{ marginTop: "10px", paddingTop: "8px", borderTop: "1px solid #1e1e1e", display: "flex", gap: "10px" }}>
-        <div style={{ flex: 1 }}>
-          <span style={{ fontSize: "9px", color: "#999", textTransform: "uppercase", letterSpacing: "0.06em", display: "block", marginBottom: "2px" }}>IMDb</span>
-          <span style={{ fontSize: "11px", color: "#aaa", fontFamily: "inherit" }}>
-            {breakdown.imdb ? `${Math.round(breakdown.imdb * 10)}/10` : "N/A"}
-          </span>
-        </div>
-        <div style={{ flex: 1 }}>
-          <span style={{ fontSize: "9px", color: "#999", textTransform: "uppercase", letterSpacing: "0.06em", display: "block", marginBottom: "2px" }}>Popularity</span>
-          <span style={{ fontSize: "11px", color: "#aaa", fontFamily: "inherit" }}>
-            {breakdown.popularity ? `${Math.round(breakdown.popularity * 100)}%` : "N/A"}
-          </span>
+      {/* ── Right column: content breakdown bars ── */}
+      <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
+        <div style={{ ...sectionHeading, marginBottom: "8px" }}>Content Breakdown</div>
+
+        <div style={{ display: "flex", flexDirection: "column", justifyContent: "space-between", flex: 1 }}>
+          {fields.map(({ key, label }) => {
+            const raw = breakdown[key] ?? 0;
+            const barWidth = Math.round(raw * 100);
+            const labelColor = barWidth > 60 ? "#00E5FF" : barWidth > 30 ? "#4dd0e1" : "#4dd0e1";
+            const fillColor = barWidth > 60 ? "#00E5FF" : barWidth > 30 ? "#4dd0e1" : "#1e6b78";
+            return (
+              <div key={key}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: "3px" }}>
+                  <span style={{ fontSize: "10px", color: "#ccc", fontFamily: "inherit" }}>{label}</span>
+                  <span style={{ fontSize: "10px", color: labelColor, fontWeight: 600, fontFamily: "inherit" }}>{barWidth}%</span>
+                </div>
+                <div style={{ height: "7px", background: "#1e1e1e", borderRadius: "3px", overflow: "hidden" }}>
+                  <div style={{
+                    height: "100%",
+                    width: `${Math.min(100, barWidth)}%`,
+                    background: fillColor,
+                    borderRadius: "3px",
+                    transition: "width 0.3s ease",
+                  }} />
+                </div>
+              </div>
+            );
+          })}
         </div>
       </div>
     </div>
@@ -224,11 +299,35 @@ function MatchTooltip({ breakdown, simPct }) {
 function TitleCard({ item, onClick, isActive }) {
   const [hovered, setHovered] = useState(false);
   const [badgeHovered, setBadgeHovered] = useState(false);
+  const cardRef = useRef(null);
+  const [tooltipPos, setTooltipPos] = useState(null);
   const initials = item.title.split(" ").slice(0, 2).map((w) => w[0]).join("").toUpperCase();
   const simPct = item.similarity_score ? Math.round(item.similarity_score * 100) : null;
 
+  // Anchor the tooltip above the card centre in viewport (fixed) coordinates so
+  // it escapes the horizontal scroll row's overflow clipping.
+  const showTooltip = () => {
+    const rect = cardRef.current?.getBoundingClientRect();
+    if (rect) {
+      // Tooltip is ~460px wide; clamp its centre so the panel stays on-screen
+      // for cards near the left/right viewport edges.
+      const halfWidth = 234;
+      const center = rect.left + rect.width / 2;
+      const clamped = Math.min(
+        Math.max(center, halfWidth + 8),
+        window.innerWidth - halfWidth - 8
+      );
+      setTooltipPos({
+        left: clamped,
+        bottom: window.innerHeight - rect.top + 8, // 8px gap above the card
+      });
+    }
+    setBadgeHovered(true);
+  };
+
   return (
     <div
+      ref={cardRef}
       onClick={() => onClick(item)}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => { setHovered(false); setBadgeHovered(false); }}
@@ -310,7 +409,7 @@ function TitleCard({ item, onClick, isActive }) {
       {simPct >= 80 && (
         <div
           style={{ position: "relative", height: 0, overflow: "visible" }}
-          onMouseEnter={(e) => { e.stopPropagation(); setBadgeHovered(true); }}
+          onMouseEnter={(e) => { e.stopPropagation(); showTooltip(); }}
           onMouseLeave={(e) => { e.stopPropagation(); setBadgeHovered(false); }}
           onClick={(e) => e.stopPropagation()}
         >
@@ -328,16 +427,19 @@ function TitleCard({ item, onClick, isActive }) {
             {simPct}%
           </div>
 
-          {/* Tooltip — drops DOWN from the badge, overlaying the card face */}
-          {badgeHovered && (
+          {/* Tooltip — rendered into a body portal with fixed positioning so it
+               pops UP above the card and is never clipped by the scroll row. */}
+          {badgeHovered && tooltipPos && createPortal(
             <div style={{
-              position: "absolute",
-              top: "-194px",
-              left: 0, right: 0,
-              zIndex: 50,
+              position: "fixed",
+              left: `${tooltipPos.left}px`,
+              bottom: `${tooltipPos.bottom}px`,
+              transform: "translateX(-50%)",
+              zIndex: 1000,
             }}>
               <MatchTooltip breakdown={item.match_breakdown} simPct={simPct} />
-            </div>
+            </div>,
+            document.body
           )}
         </div>
       )}
