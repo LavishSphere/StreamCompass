@@ -555,6 +555,7 @@ _RESULT_COLS = [
     "hulu",
     "prime_video",
     "disney_plus",
+    "poster_url",
     "similarity_score",
     "match_breakdown",
 ]
@@ -743,6 +744,7 @@ def _format_results(ranked: list, df: pd.DataFrame, score_details: dict = None) 
                 "hulu": int(row.get("hulu") or 0),
                 "prime_video": int(row.get("prime_video") or 0),
                 "disney_plus": int(row.get("disney_plus") or 0),
+                "poster_url": row.get("poster_url"),
                 "similarity_score": round(score, 4),
                 "match_breakdown": _format_match_breakdown(idx, score, score_details),
             }
