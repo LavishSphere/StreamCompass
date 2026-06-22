@@ -23,8 +23,29 @@ import time
 import pandas as pd
 import requests
 
+try:
+    from dotenv import load_dotenv
+except ImportError:
+
+    def load_dotenv(path: str = ".env") -> bool:
+        """Minimal .env loader fallback for KEY=VALUE lines."""
+        if not os.path.exists(path):
+            return False
+        with open(path, encoding="utf-8") as env_file:
+            for raw_line in env_file:
+                line = raw_line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, value = line.split("=", 1)
+                os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+        return True
+
+
 DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
 MOVIELENS_DIR = os.path.join(DATA_DIR, "ml-32m")
+
+load_dotenv()
+load_dotenv(os.path.join(os.path.dirname(DATA_DIR), ".env"))
 
 # ---------------------------------------------------------------------------
 # TMDB poster configuration
@@ -378,9 +399,11 @@ def _build_poster_cache(df: pd.DataFrame) -> pd.Series:
     @param df - The master DataFrame (must have title, year, content_type columns)
     @returns  pd.Series of poster URLs indexed to match df
     """
-    # Load existing cache if present
+    # Load existing cache if present. This should work even when TMDB_API_KEY is
+    # not set, because production restarts should be able to use the cached URLs.
     if os.path.exists(POSTER_CACHE_PATH):
         cache_df = pd.read_csv(POSTER_CACHE_PATH)
+        cache_df["poster_url"] = cache_df["poster_url"].where(cache_df["poster_url"].notna(), None)
         cache = dict(zip(cache_df["cache_key"], cache_df["poster_url"]))
         print(f"Loaded {len(cache):,} cached poster URLs from disk.")
     else:
@@ -389,11 +412,23 @@ def _build_poster_cache(df: pd.DataFrame) -> pd.Series:
     # Build a unique key per row: "title||year||content_type"
     def _cache_key(row):
         title_key = str(row["title"]).lower().strip()
-        return f"{title_key}||{row.get('year', '')}||{row.get('content_type', '')}"
+        year = row.get("year", "")
+        if pd.notna(year) and year != "":
+            year = str(int(float(year)))
+        else:
+            year = ""
+        return f"{title_key}||{year}||{row.get('content_type', '')}"
 
     keys = df.apply(_cache_key, axis=1)
     missing_mask = ~keys.isin(cache)
     missing_count = missing_mask.sum()
+
+    if missing_count > 0 and not TMDB_API_KEY:
+        print(
+            f"TMDB_API_KEY is not set; using {len(cache):,} cached poster URLs "
+            f"and leaving {missing_count:,} missing."
+        )
+        return keys.map(cache)
 
     if missing_count > 0:
         print(f"Fetching {missing_count:,} new poster URLs from TMDB (this may take a while)...")
@@ -627,11 +662,8 @@ def load_data(include_orphans: bool = True) -> pd.DataFrame:
         "movielens_rating_count",
         "tfidf_soup",
     ]
-    # ----- Fetch TMDB poster URLs (cached after first run) -----
-    if TMDB_API_KEY:
-        df["poster_url"] = _build_poster_cache(df)
-    else:
-        df["poster_url"] = None
+    # ----- Load/fetch TMDB poster URLs (cached after first run) -----
+    df["poster_url"] = _build_poster_cache(df)
 
     # Add poster_url to canonical column order
     ordered.append("poster_url")

@@ -220,3 +220,4 @@ __marimo__/
 
 # Large local datasets
 backend/data/ml-32m/ratings.csv
+backend/data/poster_cache.csv
