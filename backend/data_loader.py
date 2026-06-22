@@ -5,7 +5,7 @@ content-based recommendation (TF-IDF similarity scoring).
 Sources used:
   - data/MoviesOnStreamingPlatforms.csv  → platform availability for movies
   - data/tv_shows.csv                    → platform availability for TV shows
-  - data/ml-32m/                          → optional MovieLens movie genres/tags/ratings
+  - data/ml-32m/                          → MovieLens movie genres/tags/rating summaries
   - data/netflix/netflix_movies_detailed_up_to_2025.csv   → rich movie content
   - data/netflix/netflix_tv_shows_detailed_up_to_2025.csv → rich TV content
   - data/disney/titles.csv + credits.csv → Disney+ content with cast/directors
@@ -246,7 +246,7 @@ def _load_disney_content() -> pd.DataFrame:
 
 def _load_movielens_content() -> pd.DataFrame:
     """
-    Load optional MovieLens 32M metadata.
+    Load included MovieLens 32M metadata.
 
     We use MovieLens to enrich existing movies with genres, user tags, and
     aggregate ratings. We do not add unmatched MovieLens titles by default,
@@ -342,7 +342,7 @@ def load_data(include_orphans: bool = True) -> pd.DataFrame:
     netflix = _load_netflix_content()
     disney = _load_disney_content()
 
-    # ----- Enrich base movies with MovieLens metadata when available -----
+    # ----- Enrich base movies with MovieLens metadata -----
     if not movielens.empty:
         df = _coalesce_merge(base, movielens, on=["title_key", "year"])
     else:
