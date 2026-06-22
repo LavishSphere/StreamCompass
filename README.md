@@ -28,7 +28,7 @@ StreamCompass is a content-based recommendation engine that takes a show or movi
 - pandas / numpy
 
 **Data**
-- [MovieLens 32M Dataset](https://grouplens.org/datasets/movielens/) for movie genres, user tags, and optional aggregate ratings
+- [MovieLens 32M Dataset](https://grouplens.org/datasets/movielens/) for movie genres, user tags, and cached aggregate ratings
 - Streaming platform availability data via Kaggle
 
 ---
