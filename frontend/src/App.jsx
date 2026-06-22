@@ -113,6 +113,100 @@ function StarRating({ rating }) {
 }
 
 /**
+ * MatchTooltip — breakdown popup shown when hovering the similarity % badge.
+ *
+ * Reads `match_breakdown` from the result object, populated by the backend's
+ * recommender.py weighted TF-IDF scoring. Each field (description, genres,
+ * cast, director) has its own similarity score shown as a bar.
+ *
+ * @param {Object} breakdown - item.match_breakdown from POST /recommend
+ * @param {number} simPct    - Overall similarity percentage (0–100)
+ */
+function MatchTooltip({ breakdown, simPct }) {
+  if (!breakdown) {
+    return (
+      <div style={{
+        position: "absolute", top: "calc(100% + 6px)", right: 0,
+        background: "#0d0d0d", border: "1px solid #333",
+        borderRadius: "8px", padding: "10px 12px",
+        width: "180px", zIndex: 200,
+        boxShadow: "0 8px 24px rgba(0,0,0,0.6)",
+      }}>
+        <p style={{ fontSize: "11px", color: "#555", margin: 0, fontFamily: "inherit" }}>
+          Match breakdown not available
+        </p>
+      </div>
+    );
+  }
+
+  const fields = [
+    { key: "description", label: "Description", weight: breakdown.description_weight || 0.50 },
+    { key: "genres",      label: "Genres",      weight: breakdown.genres_weight      || 0.30 },
+    { key: "cast",        label: "Cast",         weight: breakdown.cast_weight        || 0.10 },
+    { key: "director",    label: "Director",     weight: breakdown.director_weight    || 0.10 },
+  ];
+
+  return (
+    <div style={{
+      background: "#0d0d0d", border: "1px solid #333",
+      borderRadius: "8px", padding: "12px",
+      width: "148px", zIndex: 200,
+      boxShadow: "0 8px 24px rgba(0,0,0,0.6)",
+      fontFamily: "inherit",
+    }}
+      onClick={(e) => e.stopPropagation()}
+    >
+      <div style={{ marginBottom: "10px" }}>
+        <span style={{ fontSize: "11px", color: "#999", fontWeight: 600, letterSpacing: "0.06em", textTransform: "uppercase" }}>
+          Why {simPct}% match?
+        </span>
+      </div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: "7px" }}>
+        {fields.map(({ key, label }) => {
+          const raw = breakdown[key] || 0;
+          const barWidth = Math.min(100, Math.round(raw * 100));
+          return (
+            <div key={key}>
+              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "3px" }}>
+                <span style={{ fontSize: "10px", color: "#aaa", fontFamily: "inherit" }}>{label}</span>
+                <span style={{ fontSize: "10px", color: "#00E5FF", fontFamily: "inherit", fontWeight: 600 }}>
+                  {barWidth}%
+                </span>
+              </div>
+              <div style={{ height: "4px", background: "#1e1e1e", borderRadius: "2px", overflow: "hidden" }}>
+                <div style={{
+                  height: "100%",
+                  width: `${barWidth}%`,
+                  background: barWidth > 60 ? "#00E5FF" : barWidth > 30 ? "#4dd0e1" : "#1e6b78",
+                  borderRadius: "2px",
+                  transition: "width 0.3s ease",
+                }} />
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      <div style={{ marginTop: "10px", paddingTop: "8px", borderTop: "1px solid #1e1e1e", display: "flex", gap: "10px" }}>
+        <div style={{ flex: 1 }}>
+          <span style={{ fontSize: "9px", color: "#999", textTransform: "uppercase", letterSpacing: "0.06em", display: "block", marginBottom: "2px" }}>IMDb</span>
+          <span style={{ fontSize: "11px", color: "#aaa", fontFamily: "inherit" }}>
+            {breakdown.imdb ? `${Math.round(breakdown.imdb * 10)}/10` : "N/A"}
+          </span>
+        </div>
+        <div style={{ flex: 1 }}>
+          <span style={{ fontSize: "9px", color: "#999", textTransform: "uppercase", letterSpacing: "0.06em", display: "block", marginBottom: "2px" }}>Popularity</span>
+          <span style={{ fontSize: "11px", color: "#aaa", fontFamily: "inherit" }}>
+            {breakdown.popularity ? `${Math.round(breakdown.popularity * 100)}%` : "N/A"}
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
  * TitleCard — individual movie/show card in a ScrollRow.
  *
  * Displays a monogram placeholder where a poster image would go.
@@ -129,6 +223,7 @@ function StarRating({ rating }) {
  */
 function TitleCard({ item, onClick, isActive }) {
   const [hovered, setHovered] = useState(false);
+  const [badgeHovered, setBadgeHovered] = useState(false);
   const initials = item.title.split(" ").slice(0, 2).map((w) => w[0]).join("").toUpperCase();
   const simPct = item.similarity_score ? Math.round(item.similarity_score * 100) : null;
 
@@ -136,7 +231,7 @@ function TitleCard({ item, onClick, isActive }) {
     <div
       onClick={() => onClick(item)}
       onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
+      onMouseLeave={() => { setHovered(false); setBadgeHovered(false); }}
       style={{
         flexShrink: 0, width: "148px", cursor: "pointer",
         transition: "transform 0.18s ease",
@@ -156,26 +251,40 @@ function TitleCard({ item, onClick, isActive }) {
         transition: "border-color 0.18s, background 0.18s",
       }}>
         {hovered && (
-          <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: "2px", background: "#00E5FF", opacity: 0.8 }} />
+          <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: "2px", background: "#00E5FF", opacity: 0.8, zIndex: 1 }} />
         )}
 
-        {/* Monogram placeholder — replace with <img> when poster URLs are available */}
-        <div style={{
-          width: "52px", height: "52px", borderRadius: "50%",
-          background: "#1e1e1e", border: "1px solid #444",
-          display: "flex", alignItems: "center", justifyContent: "center",
-          fontSize: "18px", fontWeight: 600,
-          color: hovered ? "#00E5FF" : "#999",
-          letterSpacing: "0.05em", transition: "color 0.18s",
-          fontFamily: "inherit", marginBottom: "12px",
-        }}>
-          {initials}
-        </div>
+        {/* Poster image — shown when backend provides poster_url (TMDB).
+             Falls back to monogram initials until poster_url is available. */}
+        {item.poster_url ? (
+          <img
+            src={item.poster_url}
+            alt={item.title}
+            style={{
+              position: "absolute", top: 0, left: 0,
+              width: "100%", height: "100%",
+              objectFit: "cover", borderRadius: "6px",
+            }}
+            onError={(e) => { e.target.style.display = "none"; }}
+          />
+        ) : (
+          <div style={{
+            width: "52px", height: "52px", borderRadius: "50%",
+            background: "#1e1e1e", border: "1px solid #444",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            fontSize: "18px", fontWeight: 600,
+            color: hovered ? "#00E5FF" : "#999",
+            letterSpacing: "0.05em", transition: "color 0.18s",
+            fontFamily: "inherit", marginBottom: "12px",
+          }}>
+            {initials}
+          </div>
+        )}
 
         {/* Title + year overlay at the bottom */}
         <div style={{
           position: "absolute", bottom: 0, left: 0, right: 0,
-          padding: "12px 10px",
+          padding: "12px 10px", zIndex: 1,
           background: "linear-gradient(to top, rgba(0,0,0,0.95) 0%, transparent 100%)",
         }}>
           <div style={{
@@ -192,19 +301,46 @@ function TitleCard({ item, onClick, isActive }) {
           </div>
         </div>
 
-        {/* Similarity badge — only shown for high-confidence matches (>= 80%) */}
-        {simPct >= 80 && (
+      </div>
+
+      {/* Similarity badge — positioned over the top-right corner of the card face.
+           The outer wrapper is relative and sits between the card div and genre label,
+           with negative margin to pull it up into the card. The tooltip drops DOWN
+           from the badge, overlaying the card face. overflow:visible so it escapes. */}
+      {simPct >= 80 && (
+        <div
+          style={{ position: "relative", height: 0, overflow: "visible" }}
+          onMouseEnter={(e) => { e.stopPropagation(); setBadgeHovered(true); }}
+          onMouseLeave={(e) => { e.stopPropagation(); setBadgeHovered(false); }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          {/* Badge pill — top-right corner of the card, same as original */}
           <div style={{
-            position: "absolute", top: "8px", right: "8px",
-            background: "rgba(0,229,255,0.15)", border: "1px solid rgba(0,229,255,0.4)",
+            position: "absolute", top: "-202px", right: "8px",
+            background: badgeHovered ? "rgba(0,229,255,0.25)" : "rgba(0,229,255,0.15)",
+            border: `1px solid ${badgeHovered ? "rgba(0,229,255,0.8)" : "rgba(0,229,255,0.4)"}`,
             borderRadius: "3px", padding: "2px 5px",
             fontSize: "9px", fontWeight: 700, color: "#00E5FF",
             fontFamily: "inherit", letterSpacing: "0.05em",
+            cursor: "default", transition: "all 0.15s",
+            userSelect: "none", zIndex: 20,
           }}>
             {simPct}%
           </div>
-        )}
-      </div>
+
+          {/* Tooltip — drops DOWN from the badge, overlaying the card face */}
+          {badgeHovered && (
+            <div style={{
+              position: "absolute",
+              top: "-194px",
+              left: 0, right: 0,
+              zIndex: 50,
+            }}>
+              <MatchTooltip breakdown={item.match_breakdown} simPct={simPct} />
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Genre label below the card — always shows genre, never platform names */}
       <div style={{
@@ -281,6 +417,41 @@ function ScrollRow({ label, items, onSelect, activeId, loading }) {
 }
 
 /**
+ * DrawerMatchBadge — inline hoverable % match pill for the DetailDrawer.
+ * Reuses MatchTooltip for the breakdown, same as the card badge.
+ * Positioned with relative so the tooltip flows naturally in the drawer.
+ *
+ * @param {Object} item - The selected title object (has similarity_score + match_breakdown)
+ */
+function DrawerMatchBadge({ item }) {
+  const [hovered, setHovered] = useState(false);
+  const simPct = Math.round(item.similarity_score * 100);
+
+  return (
+    <div
+      style={{ position: "relative", display: "inline-block" }}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+    >
+      <span style={{
+        fontSize: "11px", color: "#00E5FF", fontFamily: "inherit",
+        cursor: "default",
+        borderBottom: hovered ? "1px dashed rgba(0,229,255,0.5)" : "1px dashed transparent",
+        transition: "border-color 0.15s",
+        userSelect: "none",
+      }}>
+        {simPct}% match ↗
+      </span>
+      {hovered && (
+        <div style={{ position: "absolute", bottom: "calc(100% + 6px)", left: 0, zIndex: 200 }}>
+          <MatchTooltip breakdown={item.match_breakdown} simPct={simPct} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
  * DetailDrawer — slide-up panel showing full metadata for a selected title.
  *
  * Returns null when no item is selected (zero DOM footprint when closed).
@@ -326,10 +497,9 @@ function DetailDrawer({ item, onClose }) {
                 {item.content_type === "tv" ? "TV Show" : "Movie"}
               </span>
               <StarRating rating={item.imdb_score} />
+              {/* % match — hoverable, shows same MatchTooltip breakdown as the card badge */}
               {item.similarity_score && (
-                <span style={{ fontSize: "11px", color: "#00E5FF", fontFamily: "inherit" }}>
-                  {Math.round(item.similarity_score * 100)}% match
-                </span>
+                <DrawerMatchBadge item={item} />
               )}
             </div>
           </div>
