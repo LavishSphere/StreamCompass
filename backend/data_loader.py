@@ -304,9 +304,7 @@ def _load_movielens_content() -> pd.DataFrame:
     if ratings is not None:
         ml = ml.merge(ratings, on="movieId", how="left")
 
-    return ml.drop(columns=["movieId"]).drop_duplicates(
-        subset=["title_key", "year"], keep="first"
-    )
+    return ml.drop(columns=["movieId"]).drop_duplicates(subset=["title_key", "year"], keep="first")
 
 
 # ---------------------------------------------------------------------------
@@ -380,9 +378,11 @@ def load_data(include_orphans: bool = True) -> pd.DataFrame:
                 part
                 for part in [
                     str(row["genres"]).strip() if pd.notna(row.get("genres")) else "",
-                    str(row["movielens_genres"]).strip()
-                    if pd.notna(row.get("movielens_genres"))
-                    else "",
+                    (
+                        str(row["movielens_genres"]).strip()
+                        if pd.notna(row.get("movielens_genres"))
+                        else ""
+                    ),
                 ]
                 if part
             ),
@@ -394,12 +394,12 @@ def load_data(include_orphans: bool = True) -> pd.DataFrame:
             lambda row: " ".join(
                 part
                 for part in [
-                    str(row["description"]).strip()
-                    if pd.notna(row.get("description"))
-                    else "",
-                    str(row["movielens_tags"]).strip()
-                    if pd.notna(row.get("movielens_tags"))
-                    else "",
+                    str(row["description"]).strip() if pd.notna(row.get("description")) else "",
+                    (
+                        str(row["movielens_tags"]).strip()
+                        if pd.notna(row.get("movielens_tags"))
+                        else ""
+                    ),
                 ]
                 if part
             ),
