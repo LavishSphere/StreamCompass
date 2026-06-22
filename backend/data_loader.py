@@ -18,11 +18,26 @@ Video availability comes from MoviesOnStreamingPlatforms and tv_shows instead.
 import ast
 import os
 import re
+import time
 
 import pandas as pd
+import requests
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
 MOVIELENS_DIR = os.path.join(DATA_DIR, "ml-32m")
+
+# ---------------------------------------------------------------------------
+# TMDB poster configuration
+#
+# Set the TMDB_API_KEY environment variable before starting the server:
+#   export TMDB_API_KEY=your_key_here
+#
+# Poster URLs are cached in data/poster_cache.csv so TMDB is only queried
+# once — subsequent startups load from the cache file instantly.
+# ---------------------------------------------------------------------------
+TMDB_API_KEY = os.environ.get("TMDB_API_KEY", "")
+TMDB_IMAGE_BASE = "https://image.tmdb.org/t/p/w300"
+POSTER_CACHE_PATH = os.path.join(DATA_DIR, "poster_cache.csv")
 
 
 # ---------------------------------------------------------------------------
@@ -307,6 +322,96 @@ def _load_movielens_content() -> pd.DataFrame:
     return ml.drop(columns=["movieId"]).drop_duplicates(subset=["title_key", "year"], keep="first")
 
 
+
+def _fetch_poster_url(title: str, year, content_type: str) -> str | None:
+    """
+    Look up a single title on TMDB and return the full poster image URL.
+
+    Uses the /search/movie or /search/tv endpoint depending on content_type.
+    Takes the first result's poster_path and prepends the TMDB image base URL.
+    Returns None if the title isn't found, has no poster, or the request fails.
+
+    Rate limit: TMDB free tier allows 40 requests/second. The caller should
+    sleep ~0.03s between calls to stay safely under the limit.
+
+    @param title        - Title string to search for
+    @param year         - Release year (used to narrow results, can be None)
+    @param content_type - "movie" or "tv"
+    @returns Full poster URL string, or None
+    """
+    if not TMDB_API_KEY:
+        return None
+    try:
+        endpoint = "movie" if content_type == "movie" else "tv"
+        year_param = "year" if content_type == "movie" else "first_air_date_year"
+        params = {
+            "api_key": TMDB_API_KEY,
+            "query": title,
+            "include_adult": False,
+        }
+        if pd.notna(year) and year:
+            params[year_param] = int(year)
+
+        res = requests.get(
+            f"https://api.themoviedb.org/3/search/{endpoint}",
+            params=params,
+            timeout=5,
+        )
+        results = res.json().get("results", [])
+        if results and results[0].get("poster_path"):
+            return TMDB_IMAGE_BASE + results[0]["poster_path"]
+    except Exception:
+        pass
+    return None
+
+
+def _build_poster_cache(df: pd.DataFrame) -> pd.Series:
+    """
+    Fetch poster URLs for every title in the DataFrame and cache them to disk.
+
+    On first run this queries TMDB for every row (~42k titles) at ~33 req/sec,
+    which takes roughly 20 minutes. Results are saved to data/poster_cache.csv
+    so subsequent startups load instantly from the cache.
+
+    Titles already in the cache are skipped, so this is safe to re-run if
+    new titles are added to the dataset.
+
+    @param df - The master DataFrame (must have title, year, content_type columns)
+    @returns  pd.Series of poster URLs indexed to match df
+    """
+    # Load existing cache if present
+    if os.path.exists(POSTER_CACHE_PATH):
+        cache_df = pd.read_csv(POSTER_CACHE_PATH)
+        cache = dict(zip(cache_df["cache_key"], cache_df["poster_url"]))
+        print(f"Loaded {len(cache):,} cached poster URLs from disk.")
+    else:
+        cache = {}
+
+    # Build a unique key per row: "title||year||content_type"
+    def _cache_key(row):
+        return f"{str(row['title']).lower().strip()}||{row.get('year', '')}||{row.get('content_type', '')}"
+
+    keys = df.apply(_cache_key, axis=1)
+    missing_mask = ~keys.isin(cache)
+    missing_count = missing_mask.sum()
+
+    if missing_count > 0:
+        print(f"Fetching {missing_count:,} new poster URLs from TMDB (this may take a while)...")
+        for i, (idx, row) in enumerate(df[missing_mask].iterrows()):
+            key = keys[idx]
+            url = _fetch_poster_url(row["title"], row.get("year"), row.get("content_type", "movie"))
+            cache[key] = url
+            time.sleep(0.03)  # ~33 req/sec, under TMDB's 40/sec free limit
+            if (i + 1) % 500 == 0:
+                print(f"  {i + 1:,} / {missing_count:,} fetched...")
+
+        # Save updated cache to disk
+        cache_rows = [{"cache_key": k, "poster_url": v} for k, v in cache.items()]
+        pd.DataFrame(cache_rows).to_csv(POSTER_CACHE_PATH, index=False)
+        print(f"Poster cache saved to {POSTER_CACHE_PATH}")
+
+    return keys.map(cache)
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -521,6 +626,15 @@ def load_data(include_orphans: bool = True) -> pd.DataFrame:
         "movielens_rating_count",
         "tfidf_soup",
     ]
+    # ----- Fetch TMDB poster URLs (cached after first run) -----
+    if TMDB_API_KEY:
+        df["poster_url"] = _build_poster_cache(df)
+    else:
+        df["poster_url"] = None
+
+    # Add poster_url to canonical column order
+    ordered.append("poster_url")
+
     present = [c for c in ordered if c in df.columns]
     extra = [c for c in df.columns if c not in ordered]
     return df[present + extra].reset_index(drop=True)
