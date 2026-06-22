@@ -95,7 +95,7 @@ This is a **content-based filtering** problem: we have no user interaction histo
 
 The recommendation pipeline in `recommender.py` implements several distinct AI/ML concepts from CS 4100, applied sequentially as a staged pipeline:
 
-### Stage 1 — TF-IDF Vectorization (Text Representation)
+### Stage 1 - TF-IDF Vectorization (Text Representation)
 
 Each title is represented as a weighted vector across a vocabulary of ~48,000 terms (unigrams and bigrams). We used separate TF-IDF matrices for description, genres, cast, and director, and combined them with explicit weights:
 
@@ -105,7 +105,7 @@ description: 0.50  |  genres: 0.30  |  cast: 0.10  |  director: 0.10
 
 TF-IDF (Term Frequency × Inverse Document Frequency) assigns high weight to terms that are distinctive to a specific title and low weight to terms that appear across many titles. The result is a sparse high-dimensional vector that captures the content of each title. Sublinear TF scaling (`1 + log(TF)`) also dampens the effect of repeated terms. This is how we chose to represent our title text from just letters into a vector.
 
-### Stage 2 — Uniform Cost Search (UCS) Candidate Retrieval
+### Stage 2 - Uniform Cost Search (UCS) Candidate Retrieval
 
 Retrieval is framed as a search problem. We model the data/corpus as a star-shaped graph where every title is a node connected to the query with an edge cost of `1 − cosine_similarity`. UCS expands nodes in order of non-decreasing cost using a min-priority heap, guaranteeing that the most similar titles are found first.
 
@@ -117,7 +117,7 @@ Retrieval is framed as a search problem. We model the data/corpus as a star-shap
 
 This framing generalizes naturally to multi-hop "similar-to-similar" graph structures if needed.
 
-### Stage 3 — Bayesian Scoring (Uncertainty & Probability)
+### Stage 3 - Bayesian Scoring (Uncertainty & Probability)
 
 After retrieval, we combine two independent evidence signals using a linear opinion pool:
 
@@ -127,7 +127,7 @@ score = (1 − w) × P(content_match) + w × P(quality)
 
 where `P(content_match)` is the cosine similarity (likelihood the content fits) and `P(quality)` is the normalized IMDb score (prior belief the title is good). When IMDb data is missing, the system falls back to similarity alone. This helps prevent hard failures on titles with no rating data.
 
-### Stage 4 — Linear Scorer with Gradient Descent
+### Stage 4 - Linear Scorer with Gradient Descent
 
 A weighted linear combination of three features produces a relevance score:
 
@@ -143,7 +143,7 @@ dL/dw = (2/N) Xᵀ(Xw − y)
 w ← w − α × dL/dw
 ```
 
-### Stage 5 — Logistic Regression / Sigmoid
+### Stage 5 - Logistic Regression / Sigmoid
 
 Raw scores are converted to relevance probabilities using the sigmoid function:
 
@@ -153,7 +153,7 @@ Raw scores are converted to relevance probabilities using the sigmoid function:
 
 The sigmoid is the activation function of logistic regression. Scores are mean-centered and scaled before applying sigmoid so the output is spread across (0, 1) rather than saturated near the extremes. We chose the sigmoid because it makes scores interpretable as a **probability** of relevance.
 
-### Stage 6 — Neural Network Re-Scoring
+### Stage 6 - Neural Network Re-Scoring
 
 A two-layer feed-forward neural network re-scores candidates using non-linear feature interactions:
 
@@ -164,15 +164,15 @@ h  = ReLU(W₁x + b₁)     # hidden layer: 8 units
 
 Weights are initialized with He initialization for stable ReLU gradients. The network has a `fit()` method for mini-batch gradient descent on binary cross-entropy loss if user interaction data becomes available. Currently it runs with domain-knowledge initialization but already captures non-linear interactions that the linear scorer cannot express.
 
-### Stage 7 — MDP Diversity Re-Ranking (Markov Decision Process)
+### Stage 7 - MDP Diversity Re-Ranking (Markov Decision Process)
 
-The final selection is modeled as a MDP:
+We implemented an MDP-style diversity re-ranker as an optional final-stage policy:
 
 - **State** `sₜ`: set of t titles already selected
 - **Action**: choose a title from remaining candidates
 - **Reward**: `R(s, a) = relevance(a) − λ × max_{j∈s} cos_sim(a, j)`
 
-The greedy policy picks the action maximizing immediate reward at each step. The diversity weight `λ` (default 0.1) controls the relevance/diversity tradeoff — at 0 the system returns the most similar titles; at 1 it maximizes variety. This prevents the top-10 results from being near-identical titles by the same director.
+The greedy policy picks the action maximizing immediate reward at each step. The diversity weight `λ` controls the relevance/diversity tradeoff - at 0 the system returns the most similar titles; at 1 it maximizes variety. During testing, this re-ranker sometimes pushed relevant titles below weaker but more diverse titles, so the final production path currently keeps results ordered by the blended relevance score. The MDP code remains in `recommender.py` for experimentation and future tuning.
 
 ---
 
@@ -192,9 +192,9 @@ The dataset is assembled from five sources at server startup:
 
 The merge strategy is **coalesce merging**: sources are joined left-to-right on `(title_key, year)`, and each new source fills in gaps from the previous one without overwriting existing data. This maximizes coverage while preventing higher-quality sources from being clobbered by lower-quality ones.
 
-MovieLens tags are appended to descriptions and MovieLens genres are merged into the genre field, giving the TF-IDF model richer signals for titles that previously had sparse metadata. The Amazon Prime dataset was excluded because it was found to contain fabricated titles and directors.
+MovieLens tags are appended to descriptions and MovieLens genres are merged into the genre field, giving the TF-IDF model richer signals for titles that previously had sparse metadata. MovieLens `links.csv` also provides TMDB IDs for many movies, allowing poster fetching to use direct TMDB lookups before falling back to title/year search. The Amazon Prime dataset was excluded because it was found to contain fabricated titles and directors.
 
-A `tfidf_soup` column is built for each title by concatenating all metadata fields, which serves as the input to the vectorizer.
+A `tfidf_soup` column is still built as a legacy fallback/debug field, but the recommender now vectorizes description, genres, cast, and director separately so each field can be weighted and explained independently.
 
 ### API Layer (`main.py`)
 
@@ -209,7 +209,7 @@ The `/recommend` endpoint accepts:
 | `content_type` | string | Filter to `movie` or `tv` |
 | `platforms` | list | Filter to specific platforms |
 | `min_imdb` | float | Minimum IMDb score threshold |
-| `lambda_div` | float | MDP diversity weight (0–1) |
+| `lambda_div` | float | Accepted for compatibility; MDP re-ranking is currently disabled |
 
 The response includes a `match_breakdown` field for each result containing per-field TF-IDF scores and quality signals, which powers the frontend's hover tooltip.
 
@@ -224,7 +224,7 @@ The response includes a `match_breakdown` field for each result containing per-f
 | `ngram_range` | (1, 2) | Bigrams capture phrases like "sci fi" and "based on" that unigrams miss |
 | `sublinear_tf` | True | Dampens the effect of frequently repeated words within a title |
 | Linear scorer weights | 0.75 / 0.20 / 0.05 | Content similarity dominates; IMDb and popularity act as tiebreakers |
-| `lambda_div` default | 0.1 | Gentle diversity — avoids near-duplicates while keeping results close to the query |
+| `lambda_div` default | 0.1 | Kept as an API parameter for future diversity tuning; currently not applied to final ranking |
 | `top_k` default | 10 (API), 40 (frontend) | Frontend over-fetches to populate multiple row groupings |
 | `n_candidates` (UCS) | `top_k × 5` | Over-fetch at retrieval stage to give downstream stages room to filter and re-rank |
 
@@ -234,17 +234,34 @@ The response includes a `match_breakdown` field for each result containing per-f
 
 Qualitative testing was performed by querying known titles and manually evaluating result coherence:
 
-- `"Inception"` → returns Interstellar, The Matrix, Arrival, Severance, Blade Runner 2049 — all thematically aligned (mind-bending, sci-fi, cerebral)
-- `"Breaking Bad"` → returns Better Call Saul, Ozark, Narcos, The Wire — all crime dramas with morally complex protagonists
+- `"Inception"` → returns Interstellar, The Matrix, Arrival, Severance, Blade Runner 2049 - all thematically aligned (mind-bending, sci-fi, cerebral)
+- `"Breaking Bad"` → returns Better Call Saul, Ozark, Narcos, The Wire - all crime dramas with morally complex protagonists
 - `"dark psychological thriller mystery"` (free-text) → returns titles across genres that match the descriptive terms even without a specific title match
 
 **API testing** via `curl` confirmed correct JSON responses for all six endpoints, accurate platform flag encoding (0/1 integers), and graceful null handling for titles with missing IMDb scores.
+
+**Automated smoke checks** were run against the current branch:
+
+- Python formatting/linting: `black --check`, `flake8`, and `compileall`
+- Backend API startup and endpoint checks for `/health`, `/search`, `/recommend`, `/title`, `/platforms`, and `/genres`
+- Frontend production build with Vite
+- Frontend ESLint pass
+- Mocked TMDB poster lookup confirming movie rows use direct MovieLens `tmdb_id` lookup and TV rows fall back to title/year search
 
 **Edge cases tested:**
 - Queries with no matching title (falls back to free-text TF-IDF encoding)
 - Titles with empty `tfidf_soup` (falls back to title string)
 - Platform filters that produce zero results (returns empty results array, no 500 error)
 - NaN values in IMDb/popularity fields (imputed with column median before scoring)
+
+### Representative Results
+
+| Query | Representative output pattern | Interpretation |
+|-------|-------------------------------|----------------|
+| `Inception` | Returns cerebral sci-fi and mind-bending thrillers | Strong description and genre overlap |
+| `Breaking Bad` | Returns crime dramas with morally complex protagonists | Description, genre, and cast/director signals align |
+| `dark psychological thriller mystery` | Returns matching titles without needing an exact title | Free-text TF-IDF query path works |
+| Platform-filtered query | Returns only titles available on selected services | Platform flags are correctly enforced |
 
 ---
 
@@ -256,9 +273,9 @@ Qualitative testing was performed by querying known titles and manually evaluati
 
 **Popularity bias**: Titles with richer metadata (more cast listed, longer descriptions, more user tags from MovieLens) tend to rank higher because they produce denser TF-IDF vectors. Lesser-known titles with sparse metadata are systematically disadvantaged.
 
-**TF-IDF limitations**: The model has no understanding of semantic meaning — it matches on word overlap, not concepts. "Space exploration" and "astronaut adventure" are not recognized as similar unless the exact words co-occur. A dense embedding model (e.g. sentence-transformers) would handle this better but at higher computational cost.
+**TF-IDF limitations**: The model has no understanding of semantic meaning - it matches on word overlap, not concepts. "Space exploration" and "astronaut adventure" are not recognized as similar unless the exact words co-occur. A dense embedding model (e.g. sentence-transformers) would handle this better but at higher computational cost.
 
-**Diversity tuning**: The MDP diversity re-ranker was found to hurt relevance more than it helped variety at higher `lambda_div` values. The default was reduced from 0.3 to 0.1, and the re-ranker is architecturally present but effectively minimal in impact. A learned diversity weight trained on user feedback would be more principled.
+**Diversity tuning**: The MDP diversity re-ranker was found to hurt relevance more than it helped variety at higher `lambda_div` values. It remains implemented for experimentation, but final results are currently kept in score order. A learned diversity weight trained on user feedback would be more principled.
 
 ---
 
@@ -268,7 +285,7 @@ Qualitative testing was performed by querying known titles and manually evaluati
 |---------------|------------------------------|
 | Search (BFS/DFS/UCS/A*) | UCS retrieval over a similarity graph to find top-N candidates |
 | Uncertainty & Probability | Bayesian scoring combining content likelihood with IMDb quality prior |
-| Markov Decision Processes | Greedy MDP policy for diversity-aware final re-ranking |
+| Markov Decision Processes | Optional greedy MDP policy for diversity-aware re-ranking, implemented but disabled in final output |
 | Linear Regression | LinearScorer with gradient descent weight optimization |
 | Logistic Regression | Sigmoid activation converting raw scores to relevance probabilities |
 | Neural Networks | Two-layer feed-forward network with ReLU hidden layer and sigmoid output |
@@ -280,31 +297,43 @@ Qualitative testing was performed by querying known titles and manually evaluati
 
 ```
 StreamCompass/
+├── .github/
+│   └── workflows/             # CI, lint, and deploy workflows
 ├── backend/
-│   ├── main.py            # FastAPI app and routes
-│   ├── recommender.py     # 7-stage recommendation pipeline
-│   ├── data_loader.py     # Dataset loading, merging, and preprocessing
+│   ├── main.py                # FastAPI app, response models, and routes
+│   ├── recommender.py         # Weighted TF-IDF and recommendation pipeline
+│   ├── data_loader.py         # Dataset loading, merging, posters, preprocessing
 │   ├── requirements.txt
-│   └── data/              # Dataset files (CSV sources + MovieLens)
+│   └── data/
+│       ├── MoviesOnStreamingPlatforms.csv
+│       ├── tv_shows.csv
+│       ├── amazon_prime_movies_tv_2025.csv # excluded from model due data quality
+│       ├── disney/
+│       │   ├── titles.csv
+│       │   └── credits.csv
+│       ├── netflix/
+│       │   ├── netflix_movies_detailed_up_to_2025.csv
+│       │   └── netflix_tv_shows_detailed_up_to_2025.csv
+│       └── ml-32m/
+│           ├── movies.csv
+│           ├── tags.csv
+│           ├── links.csv
+│           ├── ratings_summary.csv
+│           └── checksums.txt
 ├── frontend/
+│   ├── public/
+│   │   └── CNAME
 │   ├── src/
-│   │   ├── App.jsx        # Browse/results page with filters and drawer
-│   │   ├── LandingPage.jsx # Search entry point with autocomplete
-│   │   └── main.jsx       # React entry point and routing
+│   │   ├── App.jsx            # Browse/results page with filters and drawer
+│   │   ├── LandingPage.jsx    # Search entry point with autocomplete
+│   │   └── main.jsx           # React entry point and routing
 │   ├── index.html
-│   └── package.json
+│   ├── package.json
+│   ├── package-lock.json
+│   └── vite.config.js
+├── LICENSE
 └── README.md
 ```
-
----
-
-## Screenshots
-
-**Figure 1 — Search results for "Inception"**
-ADD IMAGE HERE ONCE DONE
-
-**Figure 2 — Match breakdown tooltip showing TF-IDF field contributions**
-ADD IMAGE HERE ONCE DONE
 
 ---
 
@@ -314,6 +343,16 @@ ADD IMAGE HERE ONCE DONE
 |------|------|
 | Ashsmith Khayrul | ML & Backend |
 | Angie Che | Frontend & Integration |
+
+---
+
+## Report Requirement Checklist
+
+1. **Name included**: team member names are listed above; NUID is intentionally omitted from this public README.
+2. **Results and code included**: implementation files are in `backend/` and `frontend/`, with representative results and testing notes documented above.
+3. **Complete explanation included**: the report explains the problem, AI techniques, system design, parameters, testing, limitations, and CS 4100 connections.
+4. **Code organization described**: the report separates the data loader, recommender, API layer, and frontend structure.
+5. **Plots/screenshots**: no mathematical plots are required for this custom project; UI behavior and endpoint results are documented through representative result tables and automated checks.
 
 ---
 
