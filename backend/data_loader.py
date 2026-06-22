@@ -5,6 +5,7 @@ content-based recommendation (TF-IDF similarity scoring).
 Sources used:
   - data/MoviesOnStreamingPlatforms.csv  → platform availability for movies
   - data/tv_shows.csv                    → platform availability for TV shows
+  - data/ml-32m/                          → optional MovieLens movie genres/tags/ratings
   - data/netflix/netflix_movies_detailed_up_to_2025.csv   → rich movie content
   - data/netflix/netflix_tv_shows_detailed_up_to_2025.csv → rich TV content
   - data/disney/titles.csv + credits.csv → Disney+ content with cast/directors
@@ -21,6 +22,7 @@ import re
 import pandas as pd
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
+MOVIELENS_DIR = os.path.join(DATA_DIR, "ml-32m")
 
 
 # ---------------------------------------------------------------------------
@@ -33,6 +35,14 @@ def _normalize_title(title: str) -> str:
     t = str(title).lower().strip()
     t = re.sub(r"[^\w\s]", "", t)
     return re.sub(r"\s+", " ", t).strip()
+
+
+def _split_title_year(title: str) -> tuple[str, float | None]:
+    """Split a MovieLens title like 'Toy Story (1995)' into title and year."""
+    match = re.match(r"^(?P<title>.*)\s+\((?P<year>\d{4})\)$", str(title).strip())
+    if not match:
+        return str(title).strip(), None
+    return match.group("title").strip(), float(match.group("year"))
 
 
 def _parse_score(value, denom: float):
@@ -52,6 +62,13 @@ def _parse_genre_list(raw) -> str:
         return ", ".join(str(i).title() for i in items)
     except (ValueError, SyntaxError):
         return str(raw).strip()
+
+
+def _format_movielens_genres(raw) -> str:
+    """Convert MovieLens pipe-delimited genres into the project's CSV style."""
+    if pd.isna(raw) or raw == "(no genres listed)":
+        return ""
+    return ", ".join(part.strip() for part in str(raw).split("|") if part.strip())
 
 
 def _coalesce_merge(left: pd.DataFrame, right: pd.DataFrame, on: list) -> pd.DataFrame:
@@ -227,6 +244,71 @@ def _load_disney_content() -> pd.DataFrame:
     )
 
 
+def _load_movielens_content() -> pd.DataFrame:
+    """
+    Load optional MovieLens 32M metadata.
+
+    We use MovieLens to enrich existing movies with genres, user tags, and
+    aggregate ratings. We do not add unmatched MovieLens titles by default,
+    because most of them have no streaming-platform availability in our app.
+    """
+    movies_path = os.path.join(MOVIELENS_DIR, "movies.csv")
+    tags_path = os.path.join(MOVIELENS_DIR, "tags.csv")
+    ratings_path = os.path.join(MOVIELENS_DIR, "ratings.csv")
+    ratings_summary_path = os.path.join(MOVIELENS_DIR, "ratings_summary.csv")
+    if not os.path.exists(movies_path):
+        return pd.DataFrame()
+
+    movies = pd.read_csv(movies_path)
+    title_year = movies["title"].apply(_split_title_year)
+    movies["title"] = title_year.apply(lambda item: item[0])
+    movies["year"] = title_year.apply(lambda item: item[1])
+    movies["title_key"] = movies["title"].apply(_normalize_title)
+    movies["movielens_genres"] = movies["genres"].apply(_format_movielens_genres)
+
+    keep = ["movieId", "title_key", "year", "movielens_genres"]
+    ml = movies[keep].copy()
+
+    if os.path.exists(tags_path):
+        tags = pd.read_csv(tags_path, usecols=["movieId", "tag"])
+        tags["tag"] = tags["tag"].fillna("").astype(str).str.strip().str.lower()
+        tags = tags[tags["tag"] != ""]
+        top_tags = (
+            tags.groupby(["movieId", "tag"])
+            .size()
+            .reset_index(name="count")
+            .sort_values(["movieId", "count", "tag"], ascending=[True, False, True])
+            .groupby("movieId")["tag"]
+            .apply(lambda values: ", ".join(values.head(8)))
+            .reset_index(name="movielens_tags")
+        )
+        ml = ml.merge(top_tags, on="movieId", how="left")
+
+    ratings = None
+    if os.path.exists(ratings_summary_path):
+        ratings = pd.read_csv(ratings_summary_path)
+    elif os.path.exists(ratings_path):
+        rating_parts = []
+        for chunk in pd.read_csv(ratings_path, usecols=["movieId", "rating"], chunksize=1_000_000):
+            rating_parts.append(
+                chunk.groupby("movieId")["rating"].agg(["sum", "count"]).reset_index()
+            )
+        if rating_parts:
+            ratings = pd.concat(rating_parts, ignore_index=True)
+            ratings = ratings.groupby("movieId").agg({"sum": "sum", "count": "sum"}).reset_index()
+            ratings["movielens_rating"] = (ratings["sum"] / ratings["count"]).round(3)
+            ratings.rename(columns={"count": "movielens_rating_count"}, inplace=True)
+            ratings = ratings[["movieId", "movielens_rating", "movielens_rating_count"]]
+            ratings.to_csv(ratings_summary_path, index=False)
+
+    if ratings is not None:
+        ml = ml.merge(ratings, on="movieId", how="left")
+
+    return ml.drop(columns=["movieId"]).drop_duplicates(
+        subset=["title_key", "year"], keep="first"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -251,16 +333,25 @@ def load_data(include_orphans: bool = True) -> pd.DataFrame:
         description, genres, cast, director,
         language, country, imdb_score, rotten_tomatoes,
         tmdb_score, tmdb_votes, popularity,
+        movielens_genres, movielens_tags, movielens_rating,
+        movielens_rating_count,
         tfidf_soup
     """
     base = _load_platform_base()
+    movielens = _load_movielens_content()
     netflix = _load_netflix_content()
     disney = _load_disney_content()
+
+    # ----- Enrich base movies with MovieLens metadata when available -----
+    if not movielens.empty:
+        df = _coalesce_merge(base, movielens, on=["title_key", "year"])
+    else:
+        df = base
 
     # ----- Enrich base with Netflix rich content -----
     # Netflix content columns (excluding join keys and content_type already in base)
     nf_content = netflix.drop(columns=["content_type"])
-    df = _coalesce_merge(base, nf_content, on=["title_key", "year"])
+    df = _coalesce_merge(df, nf_content, on=["title_key", "year"])
 
     # ----- Enrich remaining gaps with Disney content -----
     # Separate Disney-specific score cols from content cols so they don't clobber
@@ -280,6 +371,40 @@ def load_data(include_orphans: bool = True) -> pd.DataFrame:
     if "disney_age_cert" in df.columns:
         df["age_rating"] = df["age_rating"].combine_first(df["disney_age_cert"])
         df.drop(columns=["disney_age_cert"], inplace=True)
+
+    # MovieLens metadata should feed the same fields consumed by the weighted
+    # TF-IDF recommender: genres add to the genre index, tags add to description.
+    if "movielens_genres" in df.columns:
+        df["genres"] = df.apply(
+            lambda row: ", ".join(
+                part
+                for part in [
+                    str(row["genres"]).strip() if pd.notna(row.get("genres")) else "",
+                    str(row["movielens_genres"]).strip()
+                    if pd.notna(row.get("movielens_genres"))
+                    else "",
+                ]
+                if part
+            ),
+            axis=1,
+        )
+
+    if "movielens_tags" in df.columns:
+        df["description"] = df.apply(
+            lambda row: " ".join(
+                part
+                for part in [
+                    str(row["description"]).strip()
+                    if pd.notna(row.get("description"))
+                    else "",
+                    str(row["movielens_tags"]).strip()
+                    if pd.notna(row.get("movielens_tags"))
+                    else "",
+                ]
+                if part
+            ),
+            axis=1,
+        )
 
     # ----- Optionally append orphan titles (post-2021, not in platform base) -----
     if include_orphans:
@@ -363,7 +488,8 @@ def load_data(include_orphans: bool = True) -> pd.DataFrame:
             parts.append(str(row["cast"]))
         if row.get("director") and pd.notna(row["director"]):
             parts.append(str(row["director"]))
-        return " ".join(parts).strip()
+        soup = " ".join(parts).strip()
+        return soup if soup else str(row.get("title", "")).strip()
 
     df["tfidf_soup"] = df.apply(_build_soup, axis=1)
 
@@ -389,6 +515,10 @@ def load_data(include_orphans: bool = True) -> pd.DataFrame:
         "tmdb_score",
         "tmdb_votes",
         "popularity",
+        "movielens_genres",
+        "movielens_tags",
+        "movielens_rating",
+        "movielens_rating_count",
         "tfidf_soup",
     ]
     present = [c for c in ordered if c in df.columns]

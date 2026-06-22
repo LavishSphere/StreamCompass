@@ -28,7 +28,7 @@ StreamCompass is a content-based recommendation engine that takes a show or movi
 - pandas / numpy
 
 **Data**
-- [MovieLens Dataset](https://grouplens.org/datasets/movielens/)
+- [MovieLens 32M Dataset](https://grouplens.org/datasets/movielens/) for movie genres, user tags, and optional aggregate ratings
 - Streaming platform availability data via Kaggle
 
 ---
@@ -51,6 +51,10 @@ uvicorn main:app --reload
 
 The API will be running at `http://localhost:8000`. Docs available at `http://localhost:8000/docs`.
 
+### MovieLens Data
+
+StreamCompass includes MovieLens 32M metadata under `backend/data/ml-32m/` for movie genres, user tags, and cached aggregate rating signals. The app automatically uses `movies.csv`, `tags.csv`, `links.csv`, and `ratings_summary.csv` during backend startup.
+
 ### Frontend Setup
 
 ```bash
@@ -70,6 +74,9 @@ The app will be running at `http://localhost:5173`.
 | GET | `/search?q={title}` | Search for a title |
 | POST | `/recommend` | Get recommendations for a given title |
 | GET | `/platforms` | List all supported streaming platforms |
+| GET | `/genres` | List available genres |
+| GET | `/title/{title}` | Get metadata for a title |
+| GET | `/health` | Check API/data load status |
 
 ---
 
