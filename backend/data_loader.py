@@ -119,9 +119,7 @@ def _load_platform_base() -> pd.DataFrame:
     tv["content_type"] = "tv"
 
     movies["imdb_score"] = None
-    movies["rotten_tomatoes"] = movies["Rotten Tomatoes"].apply(
-        lambda x: _parse_score(x, 100)
-    )
+    movies["rotten_tomatoes"] = movies["Rotten Tomatoes"].apply(lambda x: _parse_score(x, 100))
     tv["imdb_score"] = tv["IMDb"].apply(lambda x: _parse_score(x, 10))
     tv["rotten_tomatoes"] = tv["Rotten Tomatoes"].apply(lambda x: _parse_score(x, 100))
 
@@ -166,9 +164,7 @@ def _load_netflix_content() -> pd.DataFrame:
     movies = pd.read_csv(
         os.path.join(DATA_DIR, "netflix", "netflix_movies_detailed_up_to_2025.csv")
     )
-    tv = pd.read_csv(
-        os.path.join(DATA_DIR, "netflix", "netflix_tv_shows_detailed_up_to_2025.csv")
-    )
+    tv = pd.read_csv(os.path.join(DATA_DIR, "netflix", "netflix_tv_shows_detailed_up_to_2025.csv"))
     movies["content_type"] = "movie"
     tv["content_type"] = "tv"
 
@@ -308,19 +304,13 @@ def _load_movielens_content() -> pd.DataFrame:
         ratings = pd.read_csv(ratings_summary_path)
     elif os.path.exists(ratings_path):
         rating_parts = []
-        for chunk in pd.read_csv(
-            ratings_path, usecols=["movieId", "rating"], chunksize=1_000_000
-        ):
+        for chunk in pd.read_csv(ratings_path, usecols=["movieId", "rating"], chunksize=1_000_000):
             rating_parts.append(
                 chunk.groupby("movieId")["rating"].agg(["sum", "count"]).reset_index()
             )
         if rating_parts:
             ratings = pd.concat(rating_parts, ignore_index=True)
-            ratings = (
-                ratings.groupby("movieId")
-                .agg({"sum": "sum", "count": "sum"})
-                .reset_index()
-            )
+            ratings = ratings.groupby("movieId").agg({"sum": "sum", "count": "sum"}).reset_index()
             ratings["movielens_rating"] = (ratings["sum"] / ratings["count"]).round(3)
             ratings.rename(columns={"count": "movielens_rating_count"}, inplace=True)
             ratings = ratings[["movieId", "movielens_rating", "movielens_rating_count"]]
@@ -329,9 +319,7 @@ def _load_movielens_content() -> pd.DataFrame:
     if ratings is not None:
         ml = ml.merge(ratings, on="movieId", how="left")
 
-    return ml.drop(columns=["movieId"]).drop_duplicates(
-        subset=["title_key", "year"], keep="first"
-    )
+    return ml.drop(columns=["movieId"]).drop_duplicates(subset=["title_key", "year"], keep="first")
 
 
 def _fetch_poster_url(title: str, year, content_type: str) -> str | None:
@@ -408,14 +396,10 @@ def _build_poster_cache(df: pd.DataFrame) -> pd.Series:
     missing_count = missing_mask.sum()
 
     if missing_count > 0:
-        print(
-            f"Fetching {missing_count:,} new poster URLs from TMDB (this may take a while)..."
-        )
+        print(f"Fetching {missing_count:,} new poster URLs from TMDB (this may take a while)...")
         for i, (idx, row) in enumerate(df[missing_mask].iterrows()):
             key = keys[idx]
-            url = _fetch_poster_url(
-                row["title"], row.get("year"), row.get("content_type", "movie")
-            )
+            url = _fetch_poster_url(row["title"], row.get("year"), row.get("content_type", "movie"))
             cache[key] = url
             time.sleep(0.03)  # ~33 req/sec, under TMDB's 40/sec free limit
             if (i + 1) % 500 == 0:
@@ -516,11 +500,7 @@ def load_data(include_orphans: bool = True) -> pd.DataFrame:
             lambda row: " ".join(
                 part
                 for part in [
-                    (
-                        str(row["description"]).strip()
-                        if pd.notna(row.get("description"))
-                        else ""
-                    ),
+                    (str(row["description"]).strip() if pd.notna(row.get("description")) else ""),
                     (
                         str(row["movielens_tags"]).strip()
                         if pd.notna(row.get("movielens_tags"))
@@ -540,9 +520,7 @@ def load_data(include_orphans: bool = True) -> pd.DataFrame:
             source: pd.DataFrame, orig_titles: pd.DataFrame, platform_col: str
         ) -> pd.DataFrame:
             """Source rows not already in the platform base."""
-            mask = ~source.apply(
-                lambda r: (r["title_key"], r["year"]) in base_keys, axis=1
-            )
+            mask = ~source.apply(lambda r: (r["title_key"], r["year"]) in base_keys, axis=1)
             orphans = orig_titles[mask].copy()
             orphans["title"] = orig_titles.loc[mask, "title_key"]
             for col in ("netflix", "hulu", "prime_video", "disney_plus"):
@@ -555,14 +533,10 @@ def load_data(include_orphans: bool = True) -> pd.DataFrame:
             os.path.join(DATA_DIR, "netflix", "netflix_movies_detailed_up_to_2025.csv")
         )
         nf_tv_raw = pd.read_csv(
-            os.path.join(
-                DATA_DIR, "netflix", "netflix_tv_shows_detailed_up_to_2025.csv"
-            )
+            os.path.join(DATA_DIR, "netflix", "netflix_tv_shows_detailed_up_to_2025.csv")
         )
         nf_titles_lookup = pd.concat([nf_movies_raw[["title"]], nf_tv_raw[["title"]]])
-        nf_titles_lookup["title_key"] = nf_titles_lookup["title"].apply(
-            _normalize_title
-        )
+        nf_titles_lookup["title_key"] = nf_titles_lookup["title"].apply(_normalize_title)
         nf_with_title = netflix.merge(
             nf_titles_lookup.drop_duplicates("title_key"), on="title_key", how="left"
         )
