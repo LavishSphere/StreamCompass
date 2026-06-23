@@ -399,48 +399,49 @@ function TitleCard({ item, onClick, isActive }) {
           </div>
         </div>
 
-      </div>
-
-      {/* Similarity badge — positioned over the top-right corner of the card face.
-           The outer wrapper is relative and sits between the card div and genre label,
-           with negative margin to pull it up into the card. The tooltip drops DOWN
-           from the badge, overlaying the card face. overflow:visible so it escapes. */}
-      {simPct >= 80 && (
-        <div
-          style={{ position: "relative", height: 0, overflow: "visible" }}
-          onMouseEnter={(e) => { e.stopPropagation(); showTooltip(); }}
-          onMouseLeave={(e) => { e.stopPropagation(); setBadgeHovered(false); }}
-          onClick={(e) => e.stopPropagation()}
-        >
-          {/* Badge pill — top-right corner of the card, same as original */}
-          <div style={{
-            position: "absolute", top: "-202px", right: "8px",
-            background: badgeHovered ? "rgba(0,229,255,0.25)" : "rgba(0,229,255,0.15)",
-            border: `1px solid ${badgeHovered ? "rgba(0,229,255,0.8)" : "rgba(0,229,255,0.4)"}`,
-            borderRadius: "3px", padding: "2px 5px",
-            fontSize: "9px", fontWeight: 700, color: "#00E5FF",
-            fontFamily: "inherit", letterSpacing: "0.05em",
-            cursor: "default", transition: "all 0.15s",
-            userSelect: "none", zIndex: 20,
-          }}>
+        {/* Similarity badge — top-right corner, INSIDE the card face so it
+             always renders above the poster image. zIndex:2 beats the image
+             (z-index auto) and the title gradient overlay (z-index 1), so it
+             stays visible and hoverable whether the card shows a poster or
+             the monogram fallback. */}
+        {simPct >= 80 && (
+          <div
+            onMouseEnter={(e) => { e.stopPropagation(); showTooltip(); }}
+            onMouseLeave={(e) => { e.stopPropagation(); setBadgeHovered(false); }}
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              position: "absolute", top: "8px", right: "8px", zIndex: 2,
+              background: badgeHovered ? "rgba(0,229,255,0.25)" : "rgba(0,229,255,0.15)",
+              border: `1px solid ${badgeHovered ? "rgba(0,229,255,0.8)" : "rgba(0,229,255,0.4)"}`,
+              borderRadius: "3px", padding: "2px 5px",
+              fontSize: "9px", fontWeight: 700, color: "#00E5FF",
+              fontFamily: "inherit", letterSpacing: "0.05em",
+              cursor: "default", transition: "all 0.15s",
+              userSelect: "none",
+              // Drop shadow + text shadow keep the badge legible over bright posters
+              boxShadow: "0 1px 4px rgba(0,0,0,0.55)",
+              textShadow: "0 1px 2px rgba(0,0,0,0.7)",
+            }}
+          >
             {simPct}%
           </div>
+        )}
 
-          {/* Tooltip — rendered into a body portal with fixed positioning so it
-               pops UP above the card and is never clipped by the scroll row. */}
-          {badgeHovered && tooltipPos && createPortal(
-            <div style={{
-              position: "fixed",
-              left: `${tooltipPos.left}px`,
-              bottom: `${tooltipPos.bottom}px`,
-              transform: "translateX(-50%)",
-              zIndex: 1000,
-            }}>
-              <MatchTooltip breakdown={item.match_breakdown} />
-            </div>,
-            document.body
-          )}
-        </div>
+      </div>
+
+      {/* Tooltip — rendered into a body portal with fixed positioning so it
+           pops UP above the card and is never clipped by the scroll row. */}
+      {simPct >= 80 && badgeHovered && tooltipPos && createPortal(
+        <div style={{
+          position: "fixed",
+          left: `${tooltipPos.left}px`,
+          bottom: `${tooltipPos.bottom}px`,
+          transform: "translateX(-50%)",
+          zIndex: 1000,
+        }}>
+          <MatchTooltip breakdown={item.match_breakdown} />
+        </div>,
+        document.body
       )}
 
       {/* Genre label below the card — always shows genre, never platform names */}
@@ -526,12 +527,28 @@ function ScrollRow({ label, items, onSelect, activeId, loading }) {
  */
 function DrawerMatchBadge({ item }) {
   const [hovered, setHovered] = useState(false);
+  const [tooltipPos, setTooltipPos] = useState(null);
+  const badgeRef = useRef(null);
   const simPct = Math.round(item.similarity_score * 100);
+
+  // Anchor the tooltip just above the badge in viewport (fixed) coordinates so
+  // it escapes the drawer's overflow clipping and renders above everything.
+  const showTooltip = () => {
+    const rect = badgeRef.current?.getBoundingClientRect();
+    if (rect) {
+      setTooltipPos({
+        left: rect.left,
+        bottom: window.innerHeight - rect.top + 8, // 8px gap above the text
+      });
+    }
+    setHovered(true);
+  };
 
   return (
     <div
+      ref={badgeRef}
       style={{ position: "relative", display: "inline-block" }}
-      onMouseEnter={() => setHovered(true)}
+      onMouseEnter={showTooltip}
       onMouseLeave={() => setHovered(false)}
     >
       <span style={{
@@ -543,10 +560,16 @@ function DrawerMatchBadge({ item }) {
       }}>
         {simPct}% match ↗
       </span>
-      {hovered && (
-        <div style={{ position: "absolute", bottom: "calc(100% + 6px)", left: 0, zIndex: 200 }}>
+      {hovered && tooltipPos && createPortal(
+        <div style={{
+          position: "fixed",
+          left: `${tooltipPos.left}px`,
+          bottom: `${tooltipPos.bottom}px`,
+          zIndex: 1000,
+        }}>
           <MatchTooltip breakdown={item.match_breakdown} />
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );
